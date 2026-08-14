@@ -1,5 +1,6 @@
 import type { IncomingMessage, ServerResponse } from 'node:http'
 import { AttachmentError } from './errors.ts'
+import { authorizeAttachmentRead, type SessionQueryLike } from './session-auth.ts'
 import { AttachmentStore } from './store.ts'
 import { LIMITS } from './shared/contracts.ts'
 
@@ -25,8 +26,14 @@ export async function dispatchAttachmentHttp(req: IncomingMessage, res: ServerRe
   }
 }
 
-export function registerAttachmentRoutes(ctx: { webServer: { host: string; port: number; register(config: unknown): () => void } }, store: AttachmentStore): () => void {
-  return ctx.webServer.register({ kind: 'prefix', path: BASE, handler: (req: IncomingMessage, res: ServerResponse) => dispatchAttachmentHttp(req, res, store, { expectedOrigin: `http://${ctx.webServer.host}:${ctx.webServer.port}` }) })
+export function registerAttachmentRoutes(ctx: { webServer: { host: string; port: number; register(config: unknown): () => void }; sessionQuery: SessionQueryLike }, store: AttachmentStore): () => void {
+  return ctx.webServer.register({ kind: 'prefix', path: BASE, handler: (req: IncomingMessage, res: ServerResponse) => dispatchAttachmentHttp(req, res, store, {
+    expectedOrigin: `http://${ctx.webServer.host}:${ctx.webServer.port}`,
+    authorize: async (sessionId, metadata, signal) => {
+      if (!metadata) throw new AttachmentError('ATTACHMENT_FORBIDDEN', '附件不存在或不可访问')
+      await authorizeAttachmentRead(ctx.sessionQuery, store, sessionId, metadata, signal)
+    },
+  }) })
 }
 
 async function upload(req: IncomingMessage, res: ServerResponse, store: AttachmentStore, options: AttachmentHttpOptions): Promise<void> {

@@ -4,7 +4,7 @@ import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 import { afterEach, describe, expect, it } from 'vitest'
 import { AttachmentStore } from '../src/store.ts'
-import { dispatchAttachmentHttp } from '../src/http.ts'
+import { dispatchAttachmentHttp, registerAttachmentRoutes } from '../src/http.ts'
 
 const roots: string[] = []
 
@@ -24,6 +24,18 @@ async function call(store: AttachmentStore, headers: Record<string, string>, bod
   let output = ''
   const res = { setHeader() {}, end(value: string) { output = value }, get statusCode() { return statusCode }, set statusCode(value: number) { statusCode = value } } as never
   await dispatchAttachmentHttp(req as never, res, store, { expectedOrigin: 'http://127.0.0.1:0' })
+  return { statusCode, body: JSON.parse(output) }
+}
+
+async function callRoute(handler: (req: never, res: never) => Promise<void>, method: string, url: string, headers: Record<string, string>) {
+  const req = Readable.from([]) as Readable & { method: string; url: string; headers: Record<string, string> }
+  req.method = method
+  req.url = url
+  req.headers = headers
+  let statusCode = 200
+  let output = ''
+  const res = { setHeader() {}, end(value: string) { output = value }, get statusCode() { return statusCode }, set statusCode(value: number) { statusCode = value } } as never
+  await handler(req as never, res)
   return { statusCode, body: JSON.parse(output) }
 }
 
@@ -51,5 +63,20 @@ describe('attachment HTTP routes', () => {
     const response = await call(store, { origin: 'http://127.0.0.1:0', 'x-dsh-session-id': 'session-a', 'x-dsh-batch-id': 'batch-a', 'x-dsh-file-name': 'a.config', 'content-length': String(25 * 1024 * 1024 + 1) }, Buffer.alloc(0))
     expect(response.statusCode).toBe(413)
     expect(response.body.error.code).toBe('FILE_TOO_LARGE')
+  })
+
+  it('wires session authorization into the registered metadata route', async () => {
+    const { store } = await setup()
+    const uploaded = await call(store, { origin: 'http://127.0.0.1:0', 'x-dsh-session-id': 'session-a', 'x-dsh-batch-id': 'batch-a', 'x-dsh-file-name': 'a.config' }, Buffer.from('x=1'))
+    let handler: ((req: never, res: never) => Promise<void>) | undefined
+    registerAttachmentRoutes({
+      webServer: { host: '127.0.0.1', port: 0, register(config: unknown) { handler = (config as { handler: typeof handler }).handler; return () => undefined } },
+      sessionQuery: { readSession: async () => ({ events: [`<dsh-file ref="${uploaded.body.metadata.id}"/>`] }) },
+    }, store)
+    const sameSession = await callRoute(handler!, 'GET', `/api/dsh-file-attachments/v1/files/${uploaded.body.metadata.id}`, { 'x-dsh-session-id': 'session-a' })
+    expect(sameSession.statusCode).toBe(200)
+    const response = await callRoute(handler!, 'GET', `/api/dsh-file-attachments/v1/files/${uploaded.body.metadata.id}`, { 'x-dsh-session-id': 'session-b' })
+    expect(response.statusCode).toBe(403)
+    expect(response.body.error.code).toBe('ATTACHMENT_FORBIDDEN')
   })
 })
