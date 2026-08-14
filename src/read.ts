@@ -1,4 +1,5 @@
 import { AttachmentError } from './errors.ts'
+import { readArchiveEntry } from './archive.ts'
 import { readDocx, readPptx, readXlsx } from './parsers/ooxml.ts'
 import { readPdf } from './parsers/pdf.ts'
 import { readTextPage } from './parsers/text.ts'
@@ -16,6 +17,7 @@ export async function readAttachment(handle: StoredAttachmentHandle, request: Re
     case 'xlsx': return readXlsx(handle.path, request, signal)
     case 'pptx': return readPptx(handle.path, request, signal)
   }
+  if (handle.metadata.detected.family === 'archive' && request.archivePath) return readArchiveEntry(handle, request.archivePath, signal)
   if (handle.metadata.detected.family === 'text') {
     const page = await readTextPage(handle.path, request, signal)
     return {
