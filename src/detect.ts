@@ -2,10 +2,11 @@ import { createReadStream } from 'node:fs'
 import { basename, extname } from 'node:path'
 import { fileTypeFromBuffer, type FileTypeResult } from 'file-type'
 import { Unzip, UnzipInflate } from 'fflate'
-import type { DetectedFileType } from './shared/contracts.ts'
+import { LIMITS, type DetectedFileType } from './shared/contracts.ts'
 
 const HEAD_BYTES = 4_100
 const ZIP_METADATA_BYTES = 2 * 1024 * 1024
+const ZIP_CHUNK_BYTES = LIMITS.readBytes
 
 export interface DetectInput {
   name: string
@@ -118,6 +119,9 @@ function fromMagic(file: FileTypeResult): Candidate {
     case 'xml': return textCandidate('config-xml', file.mime)
     case 'pdf': return documentCandidate('pdf', file.mime)
     case 'epub': return documentCandidate('epub', file.mime)
+    case 'docx': return documentCandidate('docx', file.mime)
+    case 'xlsx': return documentCandidate('xlsx', file.mime)
+    case 'pptx': return documentCandidate('pptx', file.mime)
     case 'zip': return archiveCandidate('zip', file.mime)
     case '7z': return archiveCandidate('7z', file.mime)
     case 'rar': return archiveCandidate('rar', file.mime)
@@ -155,6 +159,7 @@ function decode(bytes: Uint8Array, encoding: NonNullable<Candidate['encoding']>)
     text = new TextDecoder(encoding === 'utf-16be' ? 'utf-16le' : encoding, { fatal: true }).decode(bytes)
   } catch {
     text = new TextDecoder(encoding === 'utf-16be' ? 'utf-16le' : encoding).decode(bytes)
+    if (hasTooManyReplacements(text)) return undefined
   }
   if (!text || containsTooManyControls(text)) return undefined
   return { text, encoding }
@@ -173,9 +178,15 @@ function containsTooManyControls(text: string): boolean {
   let controls = 0
   for (const character of text) {
     const code = character.codePointAt(0)!
-    if (code === 0 || (code < 0x20 && code !== 0x09 && code !== 0x0a && code !== 0x0d)) controls++
+    if (code === 0x7f || (code >= 0x80 && code <= 0x9f) || (code < 0x20 && code !== 0x09 && code !== 0x0a && code !== 0x0d)) controls++
   }
   return controls / text.length > 0.01
+}
+
+function hasTooManyReplacements(text: string): boolean {
+  let replacements = 0
+  for (const character of text) if (character === '\ufffd') replacements++
+  return replacements / text.length > 0.01
 }
 
 function classifyText(name: string, text: string, encoding: NonNullable<Candidate['encoding']>): Candidate {
@@ -267,7 +278,10 @@ function extensionKind(name: string): string | undefined {
 function detectZipContainer(bytes: Uint8Array): Candidate | undefined {
   const inspector = createZipInspector()
   try {
-    inspector.unzip.push(bytes, true)
+    for (let offset = 0; offset < bytes.byteLength && !inspector.stopped(); offset += ZIP_CHUNK_BYTES) {
+      inspector.unzip.push(bytes.subarray(offset, offset + ZIP_CHUNK_BYTES), false)
+    }
+    if (!inspector.stopped()) inspector.unzip.push(new Uint8Array(), true)
   } catch {
     return undefined
   }
@@ -281,8 +295,12 @@ async function detectZipContainerFromPath(path: string, signal: AbortSignal): Pr
     for await (const chunk of stream) {
       throwIfAborted(signal)
       inspector.unzip.push(chunk, false)
+      if (inspector.stopped()) {
+        stream.destroy()
+        break
+      }
     }
-    inspector.unzip.push(new Uint8Array(), true)
+    if (!inspector.stopped()) inspector.unzip.push(new Uint8Array(), true)
   } catch (error) {
     if (signal.aborted) throw error
     return undefined
@@ -292,41 +310,69 @@ async function detectZipContainerFromPath(path: string, signal: AbortSignal): Pr
 
 function createZipInspector() {
   let metadataBytes = 0
+  let entries = 0
   let hasContentTypes = false
   let hasWord = false
   let hasExcel = false
   let hasPowerPoint = false
   let epub = false
+  let stopped = false
   const decoder = new TextDecoder()
+  const result = (): Candidate | undefined => {
+    if (hasContentTypes && hasWord) return documentCandidate('docx', 'application/vnd.openxmlformats-officedocument.wordprocessingml.document')
+    if (hasContentTypes && hasExcel) return documentCandidate('xlsx', 'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet')
+    if (hasContentTypes && hasPowerPoint) return documentCandidate('pptx', 'application/vnd.openxmlformats-officedocument.presentationml.presentation')
+    if (epub) return documentCandidate('epub', 'application/epub+zip')
+    return undefined
+  }
+  const stopWhenResolved = () => {
+    if (result()) stopped = true
+  }
   const unzip = new Unzip(file => {
+    file.ondata = () => undefined
+    entries++
     metadataBytes += Buffer.byteLength(file.name)
-    if (metadataBytes > ZIP_METADATA_BYTES) return
+    if (entries > LIMITS.archiveEntries || metadataBytes > ZIP_METADATA_BYTES) {
+      stopped = true
+      file.start()
+      return
+    }
     hasContentTypes ||= file.name === '[Content_Types].xml'
     hasWord ||= file.name.startsWith('word/')
     hasExcel ||= file.name.startsWith('xl/')
     hasPowerPoint ||= file.name.startsWith('ppt/')
-    if (file.name !== 'mimetype') return
+    if (file.name !== 'mimetype') {
+      file.start()
+      stopWhenResolved()
+      return
+    }
 
     let content = ''
+    const remaining = ZIP_METADATA_BYTES - metadataBytes
     file.ondata = (error, chunk, final) => {
-      if (error || metadataBytes > ZIP_METADATA_BYTES) return
+      if (error || chunk.byteLength > ZIP_METADATA_BYTES - metadataBytes) {
+        stopped = true
+        file.terminate()
+        return
+      }
       metadataBytes += chunk.byteLength
-      if (metadataBytes > ZIP_METADATA_BYTES) return
       content += decoder.decode(chunk, { stream: !final })
-      if (final && content === 'application/epub+zip') epub = true
+      if (final && content === 'application/epub+zip') {
+        epub = true
+        stopWhenResolved()
+      }
+    }
+    if (file.originalSize !== undefined && file.originalSize > remaining) {
+      stopped = true
+      file.ondata = () => file.terminate()
     }
     file.start()
   })
   unzip.register(UnzipInflate)
   return {
     unzip,
-    result(): Candidate | undefined {
-      if (hasContentTypes && hasWord) return documentCandidate('docx', 'application/vnd.openxmlformats-officedocument.wordprocessingml.document')
-      if (hasContentTypes && hasExcel) return documentCandidate('xlsx', 'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet')
-      if (hasContentTypes && hasPowerPoint) return documentCandidate('pptx', 'application/vnd.openxmlformats-officedocument.presentationml.presentation')
-      if (epub) return documentCandidate('epub', 'application/epub+zip')
-      return undefined
-    },
+    result,
+    stopped: () => stopped,
   }
 }
 
@@ -348,7 +394,7 @@ function hasMismatch(candidate: Candidate, safeName: string, declaredMime: strin
   const nameExtension = extname(safeName).toLowerCase()
   const extensionType = knownExtensionType(nameExtension)
   const extensionMismatch = extensionType !== undefined && extensionType !== candidate.kind
-  const mimeMismatch = declared !== '' && declared !== candidate.mime.toLowerCase() && !mimeMatchesFamily(declared, candidate.family)
+  const mimeMismatch = declared !== '' && declared !== 'application/octet-stream' && declared !== candidate.mime.toLowerCase()
   return extensionMismatch || mimeMismatch
 }
 
@@ -357,18 +403,13 @@ function knownExtensionType(extension: string): string | undefined {
     '.txt': 'text', '.json': 'config-json', '.jsonc': 'config-json', '.yaml': 'config-yaml', '.yml': 'config-yaml',
     '.ini': 'config-ini', '.toml': 'config-toml', '.pdf': 'pdf', '.zip': 'zip', '.7z': '7z', '.rar': 'rar',
     '.png': 'png', '.docx': 'docx', '.xlsx': 'xlsx', '.pptx': 'pptx', '.epub': 'epub', '.ts': 'source-typescript',
-    '.py': 'source-python', '.md': 'markdown', '.csv': 'csv', '.tsv': 'tsv', '.sql': 'sql',
+    '.tsx': 'source-typescript', '.js': 'source-javascript', '.jsx': 'source-javascript', '.py': 'source-python',
+    '.md': 'markdown', '.mdx': 'markdown', '.csv': 'csv', '.tsv': 'tsv', '.sql': 'sql', '.plist': 'plist',
+    '.conf': 'config-ini', '.config': 'config-text', '.sh': 'shell', '.zsh': 'shell', '.bash': 'shell',
+    '.c': 'source-c', '.h': 'source-c', '.cpp': 'source-cpp', '.cc': 'source-cpp', '.hpp': 'source-cpp',
+    '.go': 'source-go', '.rs': 'source-rust', '.java': 'source-java',
   }
   return mapping[extension]
-}
-
-function mimeMatchesFamily(mime: string, family: Candidate['family']): boolean {
-  if (mime === 'application/octet-stream') return true
-  if (family === 'text') return mime.startsWith('text/') || mime === 'application/json' || mime === 'application/xml' || mime === 'application/yaml' || mime === 'application/sql'
-  if (family === 'document') return mime === 'application/pdf' || mime.includes('openxmlformats') || mime === 'application/epub+zip'
-  if (family === 'archive') return mime.includes('zip') || mime.includes('rar') || mime.includes('7z')
-  if (family === 'image') return mime.startsWith('image/')
-  return false
 }
 
 async function readHead(path: string, signal: AbortSignal): Promise<Uint8Array> {

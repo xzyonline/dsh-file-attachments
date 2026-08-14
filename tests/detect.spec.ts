@@ -18,6 +18,11 @@ const utf16be = (source: string) => {
   return Buffer.concat([Buffer.from([0xfe, 0xff]), littleEndian])
 }
 
+const officeArchive = (partName: string, contentType: string) => zipSync({
+  '[Content_Types].xml': Buffer.from(`<?xml version="1.0"?><Types xmlns="http://schemas.openxmlformats.org/package/2006/content-types"><Override PartName="/${partName}" ContentType="${contentType}"/></Types>`),
+  [partName]: Buffer.from('<document/>'),
+})
+
 describe('detectFile', () => {
   it.each([
     ['app.config', '<?xml version="1.0"?><configuration/>', 'config-xml'],
@@ -58,6 +63,16 @@ describe('detectFile', () => {
   })
 
   it.each([
+    ['an invalid UTF-8 leading byte', Buffer.from([0xc3, 0x28])],
+    ['a run of invalid UTF-8 continuation bytes', Buffer.from([0x80, 0x81, 0x82])],
+    ['DEL-heavy bytes', Buffer.from([0x7f, 0x7f, 0x7f, 0x7f, 0x7f])],
+  ])('rejects %s instead of accepting replacement-decoded binary', async (_label, bytes) => {
+    const result = await detectFile({ name: 'payload.txt', declaredMime: '', bytes })
+
+    expect(result).toMatchObject({ family: 'binary', kind: 'unknown-binary', readable: false })
+  })
+
+  it.each([
     ['empty input', Buffer.alloc(0), 'unknown', 'unknown'],
     ['NUL-heavy input', Buffer.from([0, 1, 0, 2, 0, 3, 0, 4]), 'binary', 'unknown-binary'],
     ['unknown printable input', Buffer.from('unstructured prose'), 'text', 'text'],
@@ -91,6 +106,16 @@ describe('detectFile', () => {
   })
 
   it.each([
+    ['upload.bin', officeArchive('word/document.xml', 'application/vnd.openxmlformats-officedocument.wordprocessingml.document.main+xml'), 'docx'],
+    ['upload.bin', officeArchive('xl/workbook.xml', 'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet.main+xml'), 'xlsx'],
+    ['upload.bin', officeArchive('ppt/presentation.xml', 'application/vnd.openxmlformats-officedocument.presentationml.presentation.main+xml'), 'pptx'],
+  ])('keeps the subtype when file-type directly identifies real OOXML %s', async (name, bytes, kind) => {
+    const result = await detectFile({ name, declaredMime: '', bytes })
+
+    expect(result).toMatchObject({ family: 'document', kind, readable: true })
+  })
+
+  it.each([
     ['.env', 'API_URL=https://example.test', 'env'],
     ['settings.jsonc', '// comment\n{"enabled": true}', 'config-json'],
     ['settings.yaml', 'enabled: true\nitems:\n  - one', 'config-yaml'],
@@ -118,6 +143,19 @@ describe('detectFile', () => {
     const result = await detectFile({ name: 'notes.txt', declaredMime: 'application/pdf', bytes: Buffer.from('hello') })
 
     expect(result).toMatchObject({ family: 'text', kind: 'text', readable: true, mismatch: true })
+    expect(result.risks).toContain('type-mismatch')
+  })
+
+  it.each([
+    ['a DOCX declared as PDF', 'upload.docx', 'application/pdf', officeArchive('word/document.xml', 'application/vnd.openxmlformats-officedocument.wordprocessingml.document.main+xml')],
+    ['a PNG declared as JPEG', 'image.png', 'image/jpeg', Buffer.from([0x89, 0x50, 0x4e, 0x47, 0x0d, 0x0a, 0x1a, 0x0a])],
+    ['a ZIP declared as RAR', 'archive.zip', 'application/vnd.rar', zipSync({ 'notes.txt': Buffer.from('hello') })],
+    ['a PDF named as JavaScript despite its correct declared MIME', 'script.js', 'application/pdf', Buffer.from('%PDF-1.7\n')],
+    ['a PNG named as TypeScript despite its correct declared MIME', 'source.tsx', 'image/png', Buffer.from([0x89, 0x50, 0x4e, 0x47, 0x0d, 0x0a, 0x1a, 0x0a])],
+  ])('marks concrete type conflicts for %s', async (_label, name, declaredMime, bytes) => {
+    const result = await detectFile({ name, declaredMime, bytes })
+
+    expect(result.mismatch).toBe(true)
     expect(result.risks).toContain('type-mismatch')
   })
 })

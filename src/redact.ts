@@ -27,13 +27,29 @@ export function redactSensitiveText(text: string): RedactionResult {
 }
 
 function redactLine(line: string): string {
+  const json = redactJsonValues(line)
+  if (json !== line) return json
+
   const match = line.match(/^(\s*)((?:"[^"]+"|'[^']+'|[A-Za-z][A-Za-z0-9_-]*))(\s*)([:=])(\s*)(.*)$/)
   if (!match) return line
   const [, indentation, originalKey, keyWhitespace, separator, valueWhitespace, value] = match
   const key = originalKey!.replace(/^['"]|['"]$/g, '')
   if (!SECRET_KEY.test(key)) return line
 
-  const quote = value!.match(/^\s*(["'])/)
+  const [secretValue, comment] = splitTrailingComment(value!, separator!)
+  const quote = secretValue.match(/^\s*(["'])/)
   const replacement = quote ? `${quote[1]}[REDACTED]${quote[1]}` : '[REDACTED]'
-  return `${indentation}${originalKey}${keyWhitespace}${separator}${valueWhitespace}${replacement}`
+  return `${indentation}${originalKey}${keyWhitespace}${separator}${valueWhitespace}${replacement}${comment}`
+}
+
+function redactJsonValues(line: string): string {
+  return line.replace(/"((?:\\.|[^"\\])*)"(\s*:\s*)("(?:\\.|[^"\\])*"|-?\d+(?:\.\d+)?(?:[eE][+-]?\d+)?|true|false|null)(?=\s*[,}\]])/g, (match, rawKey: string, separator: string, _value: string) => {
+    if (!SECRET_KEY.test(rawKey)) return match
+    return `"${rawKey}"${separator}"[REDACTED]"`
+  })
+}
+
+function splitTrailingComment(value: string, separator: string): [string, string] {
+  const comment = value.match(separator === '=' ? /^(.*?)(\s+(?:#|;).*)$/ : /^(.*?)(\s+#.*)$/)
+  return comment ? [comment[1]!, comment[2]!] : [value, '']
 }

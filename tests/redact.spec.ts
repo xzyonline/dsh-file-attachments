@@ -35,4 +35,21 @@ describe('redactSensitiveText', () => {
       redacted: 1,
     })
   })
+
+  it('redacts sensitive fields inside minified JSON without breaking its punctuation', () => {
+    const source = '{"client_secret":"value","enabled":true,"token":123}'
+    const result = redactSensitiveText(source)
+
+    expect(result).toEqual({ text: '{"client_secret":"[REDACTED]","enabled":true,"token":"[REDACTED]"}', redacted: 1 })
+    expect(JSON.parse(result.text)).toEqual({ client_secret: '[REDACTED]', enabled: true, token: '[REDACTED]' })
+  })
+
+  it('preserves trailing commas and configuration comments while replacing only secret values', () => {
+    const source = '{"client_secret":"value",}\ntoken: abc # rotate me\npassword=abc ; keep this comment'
+
+    expect(redactSensitiveText(source)).toEqual({
+      text: '{"client_secret":"[REDACTED]",}\ntoken: [REDACTED] # rotate me\npassword=[REDACTED] ; keep this comment',
+      redacted: 3,
+    })
+  })
 })
