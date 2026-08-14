@@ -1,4 +1,6 @@
 import { AttachmentError } from './errors.ts'
+import { readDocx, readPptx, readXlsx } from './parsers/ooxml.ts'
+import { readPdf } from './parsers/pdf.ts'
 import { readTextPage } from './parsers/text.ts'
 import type { ReadAttachmentRequest, ReadAttachmentResult } from './worker-protocol.ts'
 
@@ -8,6 +10,12 @@ export interface StoredAttachmentHandle {
 }
 
 export async function readAttachment(handle: StoredAttachmentHandle, request: ReadAttachmentRequest, signal: AbortSignal): Promise<ReadAttachmentResult> {
+  switch (handle.metadata.detected.kind) {
+    case 'pdf': return readPdf(handle.path, request, signal)
+    case 'docx': return readDocx(handle.path, request, signal)
+    case 'xlsx': return readXlsx(handle.path, request, signal)
+    case 'pptx': return readPptx(handle.path, request, signal)
+  }
   if (handle.metadata.detected.family === 'text') {
     const page = await readTextPage(handle.path, request, signal)
     return {
