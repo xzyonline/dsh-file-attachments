@@ -7,5 +7,9 @@ describe('attachment tools', () => {
     expect(definitions.map(definition => definition.name)).toEqual(['attachment_info', 'read_attachment', 'list_archive'])
     expect(definitions[0]!.parameters.attachment_id!.required).toBe(true)
     expect(definitions[1]!.parameters.archive_path!.type).toBe('string')
+    for (const definition of definitions) {
+      expect(definition.output?.schema).toMatchObject({ type: 'object' })
+      expect(definition.output?.render).toEqual(expect.any(Function))
+    }
   })
 })
