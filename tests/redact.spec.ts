@@ -69,4 +69,22 @@ describe('redactSensitiveText', () => {
       redacted: 2,
     })
   })
+
+  it('redacts multiline JSON object values without corrupting the surrounding document', () => {
+    const source = '{\n  "password": {\n    "nested": "LEAK"\n  },\n  "enabled": true\n}'
+
+    expect(redactSensitiveText(source)).toEqual({
+      text: '{\n  "password": "[REDACTED]",\n  "enabled": true\n}',
+      redacted: 1,
+    })
+  })
+
+  it('redacts YAML block scalar continuations under a sensitive key', () => {
+    const source = 'password: |\n  LEAK\n  still-secret\nenabled: true'
+
+    expect(redactSensitiveText(source)).toEqual({
+      text: 'password: [REDACTED]\n  [REDACTED]\n  [REDACTED]\nenabled: true',
+      redacted: 3,
+    })
+  })
 })

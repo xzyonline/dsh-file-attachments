@@ -8,9 +8,12 @@ const PEM_BEGIN = /^([ \t]*-----BEGIN (?:[A-Z ]+ )?PRIVATE KEY-----)[ \t]*$/
 const PEM_END = /^[ \t]*-----END (?:[A-Z ]+ )?PRIVATE KEY-----[ \t]*$/
 
 export function redactSensitiveText(text: string): RedactionResult {
-  let redacted = 0
+  const firstNonWhitespace = text.match(/\S/)?.[0]
+  const structuredText = firstNonWhitespace === '{' || firstNonWhitespace === '[' ? redactJsonValues(text) : text
+  let redacted = structuredText === text ? 0 : 1
+  let blockIndent: number | undefined
   let privateKey = false
-  const lines = text.split(/\r?\n/).map(line => {
+  const lines = structuredText.split(/\r?\n/).map(line => {
     if (PEM_BEGIN.test(line)) {
       privateKey = true
       return line
@@ -19,16 +22,32 @@ export function redactSensitiveText(text: string): RedactionResult {
       privateKey = false
       return line
     }
+    const indentation = line.match(/^\s*/)?.[0].length ?? 0
+    if (blockIndent !== undefined) {
+      if (line.trim() === '') return line
+      if (indentation > blockIndent) {
+        redacted++
+        return `${line.slice(0, indentation)}[REDACTED]`
+      }
+      blockIndent = undefined
+    }
     const next = privateKey && line.trim() ? `${line.match(/^\s*/)?.[0] ?? ''}[REDACTED]` : redactLine(line)
     if (next !== line) redacted++
+    if (isSensitiveYamlBlockStart(line)) blockIndent = indentation
     return next
   })
   return { text: lines.join('\n'), redacted }
 }
 
+function isSensitiveYamlBlockStart(line: string): boolean {
+  const match = line.match(/^(\s*)([A-Za-z][A-Za-z0-9_-]*)\s*:\s*[|>][-+]?\d*\s*(?:#.*)?$/)
+  return match !== null && SECRET_KEY.test(match[2]!)
+}
+
 function redactLine(line: string): string {
   const json = redactJsonValues(line)
   if (json !== line) return json
+  if (/^\s*"/.test(line) && /"\s*:/.test(line)) return line
 
   const match = line.match(/^(\s*)((?:"[^"]+"|'[^']+'|[A-Za-z][A-Za-z0-9_-]*))(\s*)([:=])(\s*)(.*)$/)
   if (!match) return line

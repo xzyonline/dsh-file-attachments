@@ -91,7 +91,7 @@ export async function detectFileFromPath(input: DetectPathInput): Promise<Detect
 }
 
 function sanitizeFilename(name: string): string {
-  const withoutControls = name.replace(/[\u0000-\u001f\u007f]/g, '')
+  const withoutControls = name.replace(/[\u0000-\u001f\u007f-\u009f]/g, '')
   const base = basename(withoutControls.replace(/\\/g, '/')).replace(/[\\/]/g, '_')
   if (!base) return 'unnamed'
 
