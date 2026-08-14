@@ -1,0 +1,11 @@
+{
+  "id": "@dsh-external/dsh-file-attachments",
+  "version": "0.1.0",
+  "main": "./lib/index.js",
+  "description": "Session-safe generic file attachments for DeepSeek Harness",
+  "engines": { "dsh": ">=0.1.0-rc.6" },
+  "contributes": {
+    "tools": ["attachment_info", "read_attachment", "list_archive"],
+    "skills": []
+  }
+}
