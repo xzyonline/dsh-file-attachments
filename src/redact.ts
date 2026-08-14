@@ -43,13 +43,88 @@ function redactLine(line: string): string {
 }
 
 function redactJsonValues(line: string): string {
-  return line.replace(/"((?:\\.|[^"\\])*)"(\s*:\s*)("(?:\\.|[^"\\])*"|-?\d+(?:\.\d+)?(?:[eE][+-]?\d+)?|true|false|null)(?=\s*[,}\]])/g, (match, rawKey: string, separator: string, _value: string) => {
-    if (!SECRET_KEY.test(rawKey)) return match
-    return `"${rawKey}"${separator}"[REDACTED]"`
-  })
+  let output = ''
+  let cursor = 0
+  for (let index = 0; index < line.length; index++) {
+    if (line[index] !== '"') continue
+    const keyEnd = jsonStringEnd(line, index)
+    if (keyEnd === undefined) return line
+    const separatorStart = skipWhitespace(line, keyEnd)
+    if (line[separatorStart] !== ':') {
+      index = keyEnd - 1
+      continue
+    }
+    const valueStart = skipWhitespace(line, separatorStart + 1)
+    const valueEnd = jsonValueEnd(line, valueStart)
+    if (valueEnd === undefined) return line
+    let key: string
+    try {
+      key = JSON.parse(line.slice(index, keyEnd)) as string
+    } catch {
+      return line
+    }
+    if (SECRET_KEY.test(key)) {
+      output += line.slice(cursor, valueStart) + '"[REDACTED]"'
+      cursor = valueEnd
+      index = valueEnd - 1
+    } else {
+      index = keyEnd - 1
+    }
+  }
+  return output ? output + line.slice(cursor) : line
 }
 
 function splitTrailingComment(value: string, separator: string): [string, string] {
-  const comment = value.match(separator === '=' ? /^(.*?)(\s+(?:#|;).*)$/ : /^(.*?)(\s+#.*)$/)
-  return comment ? [comment[1]!, comment[2]!] : [value, '']
+  let quote = ''
+  for (let index = 0; index < value.length; index++) {
+    const character = value[index]!
+    if (quote) {
+      if (character === '\\') index++
+      else if (character === quote) quote = ''
+      continue
+    }
+    if (character === '"' || character === "'") quote = character
+    else if ((character === '#' || (separator === '=' && character === ';')) && index > 0 && /\s/.test(value[index - 1]!)) return [value.slice(0, index).trimEnd(), value.slice(index - 1)]
+  }
+  return [value, '']
+}
+
+function jsonStringEnd(text: string, start: number): number | undefined {
+  for (let index = start + 1; index < text.length; index++) {
+    if (text[index] === '\\') {
+      index++
+      continue
+    }
+    if (text[index] === '"') return index + 1
+  }
+  return undefined
+}
+
+function jsonValueEnd(text: string, start: number): number | undefined {
+  if (text[start] === '"') return jsonStringEnd(text, start)
+  if (text[start] === '{' || text[start] === '[') {
+    const stack = [text[start]!]
+    for (let index = start + 1; index < text.length; index++) {
+      if (text[index] === '"') {
+        const end = jsonStringEnd(text, index)
+        if (end === undefined) return undefined
+        index = end - 1
+      } else if (text[index] === '{' || text[index] === '[') stack.push(text[index]!)
+      else if (text[index] === '}' || text[index] === ']') {
+        const open = stack.pop()
+        if ((text[index] === '}' && open !== '{') || (text[index] === ']' && open !== '[')) return undefined
+        if (stack.length === 0) return index + 1
+      }
+    }
+    return undefined
+  }
+  let index = start
+  while (index < text.length && !/[\s,}\]]/.test(text[index]!)) index++
+  return index > start ? index : undefined
+}
+
+function skipWhitespace(text: string, start: number): number {
+  let index = start
+  while (index < text.length && /\s/.test(text[index]!)) index++
+  return index
 }

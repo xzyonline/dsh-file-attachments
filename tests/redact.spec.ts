@@ -52,4 +52,21 @@ describe('redactSensitiveText', () => {
       redacted: 3,
     })
   })
+
+  it('redacts escaped JSON keys and replaces object and array values as complete JSON values', () => {
+    const source = '{"client\\u005fsecret":{"nested":"value"},"token":["one","two"],"ok":true}'
+    const result = redactSensitiveText(source)
+
+    expect(result).toEqual({ text: '{"client\\u005fsecret":"[REDACTED]","token":"[REDACTED]","ok":true}', redacted: 1 })
+    expect(JSON.parse(result.text)).toEqual({ client_secret: '[REDACTED]', token: '[REDACTED]', ok: true })
+  })
+
+  it('keeps comment markers within quoted values from leaking or corrupting configuration redaction', () => {
+    const source = 'token="abc # still-secret; still-secret" # retained comment\npassword=\'abc ; still-secret # still-secret\' ; retained comment'
+
+    expect(redactSensitiveText(source)).toEqual({
+      text: 'token="[REDACTED]" # retained comment\npassword=\'[REDACTED]\' ; retained comment',
+      redacted: 2,
+    })
+  })
 })

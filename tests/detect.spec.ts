@@ -23,6 +23,22 @@ const officeArchive = (partName: string, contentType: string) => zipSync({
   [partName]: Buffer.from('<document/>'),
 })
 
+const unsupportedOfficePayload = () => {
+  const archive = Buffer.from(zipSync({
+    '[Content_Types].xml': Buffer.from('<Types/>'),
+    'word/document.xml': Buffer.from('not inspected during detection'),
+  }))
+  const name = Buffer.from('word/document.xml')
+  const nameOffset = archive.indexOf(name)
+  const localOffset = archive.lastIndexOf(Buffer.from([0x50, 0x4b, 0x03, 0x04]), nameOffset)
+  const centralOffset = archive.lastIndexOf(Buffer.from([0x50, 0x4b, 0x01, 0x02]), nameOffset)
+  archive.writeUInt16LE(99, localOffset + 8)
+  archive.writeUInt16LE(99, centralOffset + 10)
+  archive.writeUInt32LE(3 * 1024 * 1024, localOffset + 22)
+  archive.writeUInt32LE(3 * 1024 * 1024, centralOffset + 24)
+  return archive
+}
+
 describe('detectFile', () => {
   it.each([
     ['app.config', '<?xml version="1.0"?><configuration/>', 'config-xml'],
@@ -115,6 +131,19 @@ describe('detectFile', () => {
     expect(result).toMatchObject({ family: 'document', kind, readable: true })
   })
 
+  it('identifies Office from bounded central-directory metadata without decompressing an unsupported entry', async () => {
+    const result = await detectFile({ name: 'upload.zip', declaredMime: 'application/zip', bytes: unsupportedOfficePayload() })
+
+    expect(result).toMatchObject({ family: 'document', kind: 'docx', readable: true, mismatch: true })
+  })
+
+  it('refuses a highly compressible oversized EPUB mimetype payload before decompression', async () => {
+    const bytes = zipSync({ mimetype: Buffer.alloc(3 * 1024 * 1024, 'a') }, { level: 9 })
+    const result = await detectFile({ name: 'bomb.zip', declaredMime: 'application/zip', bytes })
+
+    expect(result).toMatchObject({ family: 'archive', kind: 'zip', readable: false })
+  })
+
   it.each([
     ['.env', 'API_URL=https://example.test', 'env'],
     ['settings.jsonc', '// comment\n{"enabled": true}', 'config-json'],
@@ -152,11 +181,22 @@ describe('detectFile', () => {
     ['a ZIP declared as RAR', 'archive.zip', 'application/vnd.rar', zipSync({ 'notes.txt': Buffer.from('hello') })],
     ['a PDF named as JavaScript despite its correct declared MIME', 'script.js', 'application/pdf', Buffer.from('%PDF-1.7\n')],
     ['a PNG named as TypeScript despite its correct declared MIME', 'source.tsx', 'image/png', Buffer.from([0x89, 0x50, 0x4e, 0x47, 0x0d, 0x0a, 0x1a, 0x0a])],
+    ['a PNG named as JPEG despite its correct declared MIME', 'photo.jpg', 'image/png', Buffer.from([0x89, 0x50, 0x4e, 0x47, 0x0d, 0x0a, 0x1a, 0x0a])],
   ])('marks concrete type conflicts for %s', async (_label, name, declaredMime, bytes) => {
     const result = await detectFile({ name, declaredMime, bytes })
 
     expect(result.mismatch).toBe(true)
     expect(result.risks).toContain('type-mismatch')
+  })
+
+  it.each([
+    ['source.js', 'text/javascript', Buffer.from('export const answer = 42')],
+    ['settings.yaml', 'text/yaml', Buffer.from('enabled: true')],
+    ['archive.zip', 'application/x-zip-compressed', zipSync({ 'notes.txt': Buffer.from('hello') })],
+  ])('accepts safe kind-specific MIME aliases for %s', async (name, declaredMime, bytes) => {
+    const result = await detectFile({ name, declaredMime, bytes })
+
+    expect(result.mismatch).toBe(false)
   })
 })
 
@@ -168,6 +208,18 @@ describe('detectFileFromPath', () => {
     try {
       const result = await detectFileFromPath({ name: 'app.config', declaredMime: '', path, signal: new AbortController().signal })
       expect(result).toMatchObject({ family: 'text', kind: 'config-json', readable: true })
+    } finally {
+      await rm(directory, { recursive: true, force: true })
+    }
+  })
+
+  it('reads only ZIP metadata needed to classify an on-disk Office archive', async () => {
+    const directory = await mkdtemp(join(tmpdir(), 'dsh-detect-'))
+    const path = join(directory, 'upload.zip')
+    await writeFile(path, officeArchive('word/document.xml', 'application/vnd.openxmlformats-officedocument.wordprocessingml.document.main+xml'))
+    try {
+      const result = await detectFileFromPath({ name: 'upload.zip', declaredMime: '', path, signal: new AbortController().signal })
+      expect(result).toMatchObject({ family: 'document', kind: 'docx', readable: true })
     } finally {
       await rm(directory, { recursive: true, force: true })
     }

@@ -1,12 +1,15 @@
+import { open, stat } from 'node:fs/promises'
 import { createReadStream } from 'node:fs'
 import { basename, extname } from 'node:path'
 import { fileTypeFromBuffer, type FileTypeResult } from 'file-type'
-import { Unzip, UnzipInflate } from 'fflate'
+import { inflateSync } from 'fflate'
 import { LIMITS, type DetectedFileType } from './shared/contracts.ts'
 
 const HEAD_BYTES = 4_100
 const ZIP_METADATA_BYTES = 2 * 1024 * 1024
-const ZIP_CHUNK_BYTES = LIMITS.readBytes
+const ZIP_EOCD_BYTES = 65_557
+const EPUB_MIMETYPE_BYTES = 128
+const ZIP_LOCAL_HEADER_BYTES = 64 * 1024
 
 export interface DetectInput {
   name: string
@@ -22,6 +25,19 @@ export interface DetectPathInput {
 }
 
 type Candidate = Omit<DetectedFileType, 'mismatch' | 'risks'>
+
+interface ZipEntry {
+  name: string
+  compression: number
+  compressedSize: number
+  uncompressedSize: number
+  localOffset: number
+}
+
+interface ZipMetadata {
+  entries: readonly ZipEntry[]
+  archiveBytes: number
+}
 
 const textCandidate = (
   kind: string,
@@ -49,7 +65,7 @@ export async function detectFile(input: DetectInput): Promise<DetectedFileType> 
   const safeName = sanitizeFilename(input.name)
   const head = input.bytes.subarray(0, HEAD_BYTES)
   const binary = looksTextBom(head) ? undefined : await magicFrom(head)
-  const container = binary?.ext === 'zip' ? detectZipContainer(input.bytes) : undefined
+  const container = binary?.ext === 'zip' ? await detectZipContainer(input.bytes) : undefined
   if (container) return finalize(container, safeName, input.declaredMime)
   if (binary && !isTextMagic(binary)) return finalize(fromMagic(binary), safeName, input.declaredMime)
 
@@ -128,6 +144,7 @@ function fromMagic(file: FileTypeResult): Candidate {
     case 'png': return imageCandidate('png', file.mime)
     case 'jpg':
     case 'jpeg':
+      return imageCandidate('jpeg', file.mime)
     case 'gif':
     case 'webp': return imageCandidate(file.ext, file.mime)
     case 'elf':
@@ -275,105 +292,153 @@ function extensionKind(name: string): string | undefined {
   }
 }
 
-function detectZipContainer(bytes: Uint8Array): Candidate | undefined {
-  const inspector = createZipInspector()
-  try {
-    for (let offset = 0; offset < bytes.byteLength && !inspector.stopped(); offset += ZIP_CHUNK_BYTES) {
-      inspector.unzip.push(bytes.subarray(offset, offset + ZIP_CHUNK_BYTES), false)
-    }
-    if (!inspector.stopped()) inspector.unzip.push(new Uint8Array(), true)
-  } catch {
-    return undefined
-  }
-  return inspector.result()
+async function detectZipContainer(bytes: Uint8Array): Promise<Candidate | undefined> {
+  const metadata = inspectZipBytes(bytes)
+  if (!metadata) return undefined
+  return classifyZip(metadata, entry => readZipEntryBytes(bytes, entry))
 }
 
 async function detectZipContainerFromPath(path: string, signal: AbortSignal): Promise<Candidate | undefined> {
-  const inspector = createZipInspector()
-  const stream = createReadStream(path, { signal })
-  try {
-    for await (const chunk of stream) {
-      throwIfAborted(signal)
-      inspector.unzip.push(chunk, false)
-      if (inspector.stopped()) {
-        stream.destroy()
-        break
-      }
-    }
-    if (!inspector.stopped()) inspector.unzip.push(new Uint8Array(), true)
-  } catch (error) {
-    if (signal.aborted) throw error
-    return undefined
-  }
-  return inspector.result()
+  const metadata = await inspectZipPath(path, signal)
+  if (!metadata) return undefined
+  return classifyZip(metadata, entry => readZipEntryFromPath(path, entry, signal))
 }
 
-function createZipInspector() {
-  let metadataBytes = 0
-  let entries = 0
-  let hasContentTypes = false
-  let hasWord = false
-  let hasExcel = false
-  let hasPowerPoint = false
-  let epub = false
-  let stopped = false
-  const decoder = new TextDecoder()
-  const result = (): Candidate | undefined => {
-    if (hasContentTypes && hasWord) return documentCandidate('docx', 'application/vnd.openxmlformats-officedocument.wordprocessingml.document')
-    if (hasContentTypes && hasExcel) return documentCandidate('xlsx', 'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet')
-    if (hasContentTypes && hasPowerPoint) return documentCandidate('pptx', 'application/vnd.openxmlformats-officedocument.presentationml.presentation')
-    if (epub) return documentCandidate('epub', 'application/epub+zip')
+async function classifyZip(metadata: ZipMetadata, readEntry: (entry: ZipEntry) => Uint8Array | undefined | Promise<Uint8Array | undefined>): Promise<Candidate | undefined> {
+  const names = new Set(metadata.entries.map(entry => entry.name))
+  if (names.has('[Content_Types].xml') && names.has('word/document.xml')) return documentCandidate('docx', 'application/vnd.openxmlformats-officedocument.wordprocessingml.document')
+  if (names.has('[Content_Types].xml') && names.has('xl/workbook.xml')) return documentCandidate('xlsx', 'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet')
+  if (names.has('[Content_Types].xml') && names.has('ppt/presentation.xml')) return documentCandidate('pptx', 'application/vnd.openxmlformats-officedocument.presentationml.presentation')
+
+  const mimetype = metadata.entries.find(entry => entry.name === 'mimetype')
+  if (!mimetype || mimetype.compressedSize > EPUB_MIMETYPE_BYTES || mimetype.uncompressedSize > EPUB_MIMETYPE_BYTES) return undefined
+  const payload = await readEntry(mimetype)
+  if (!payload) return undefined
+  const text = decodeZipEntry(mimetype, payload)
+  return text === 'application/epub+zip' ? documentCandidate('epub', 'application/epub+zip') : undefined
+}
+
+function inspectZipBytes(bytes: Uint8Array): ZipMetadata | undefined {
+  if (bytes.byteLength > LIMITS.archiveBytes) return undefined
+  const tailStart = Math.max(0, bytes.byteLength - ZIP_EOCD_BYTES)
+  const directory = findCentralDirectory(bytes.subarray(tailStart), bytes.byteLength)
+  if (!directory || directory.offset + directory.size > bytes.byteLength) return undefined
+  return parseCentralDirectory(bytes.subarray(directory.offset, directory.offset + directory.size), directory.entries, bytes.byteLength)
+}
+
+async function inspectZipPath(path: string, signal: AbortSignal): Promise<ZipMetadata | undefined> {
+  throwIfAborted(signal)
+  const fileInfo = await stat(path)
+  if (fileInfo.size > LIMITS.archiveBytes || fileInfo.size < 22) return undefined
+  const handle = await open(path, 'r')
+  try {
+    const tailBytes = Math.min(fileInfo.size, ZIP_EOCD_BYTES)
+    const tail = await readExactly(handle, tailBytes, fileInfo.size - tailBytes, signal)
+    const directory = tail && findCentralDirectory(tail, fileInfo.size)
+    if (!directory || directory.offset + directory.size > fileInfo.size) return undefined
+    const central = await readExactly(handle, directory.size, directory.offset, signal)
+    return central ? parseCentralDirectory(central, directory.entries, fileInfo.size) : undefined
+  } finally {
+    await handle.close()
+  }
+}
+
+function findCentralDirectory(tail: Uint8Array, archiveBytes: number): { entries: number; size: number; offset: number } | undefined {
+  for (let offset = tail.byteLength - 22; offset >= 0; offset--) {
+    if (readU32(tail, offset) !== 0x06054b50) continue
+    const commentLength = readU16(tail, offset + 20)
+    if (offset + 22 + commentLength !== tail.byteLength) continue
+    const disk = readU16(tail, offset + 4)
+    const directoryDisk = readU16(tail, offset + 6)
+    const entries = readU16(tail, offset + 10)
+    const size = readU32(tail, offset + 12)
+    const directoryOffset = readU32(tail, offset + 16)
+    if (disk !== 0 || directoryDisk !== 0 || entries === 0xffff || size === 0xffffffff || directoryOffset === 0xffffffff) return undefined
+    if (entries > LIMITS.archiveEntries || size > ZIP_METADATA_BYTES || directoryOffset + size > archiveBytes) return undefined
+    return { entries, size, offset: directoryOffset }
+  }
+  return undefined
+}
+
+function parseCentralDirectory(bytes: Uint8Array, expectedEntries: number, archiveBytes: number): ZipMetadata | undefined {
+  try {
+    const entries: ZipEntry[] = []
+    let offset = 0
+    while (offset < bytes.byteLength) {
+      if (entries.length >= expectedEntries || readU32(bytes, offset) !== 0x02014b50 || offset + 46 > bytes.byteLength) return undefined
+      const compression = readU16(bytes, offset + 10)
+      const compressedSize = readU32(bytes, offset + 20)
+      const uncompressedSize = readU32(bytes, offset + 24)
+      const nameLength = readU16(bytes, offset + 28)
+      const extraLength = readU16(bytes, offset + 30)
+      const commentLength = readU16(bytes, offset + 32)
+      const localOffset = readU32(bytes, offset + 42)
+      const entryEnd = offset + 46 + nameLength + extraLength + commentLength
+      if (compressedSize === 0xffffffff || uncompressedSize === 0xffffffff || localOffset === 0xffffffff || entryEnd > bytes.byteLength || localOffset >= archiveBytes) return undefined
+      const name = new TextDecoder('utf-8', { fatal: true }).decode(bytes.subarray(offset + 46, offset + 46 + nameLength))
+      entries.push({ name, compression, compressedSize, uncompressedSize, localOffset })
+      offset = entryEnd
+    }
+    return entries.length === expectedEntries ? { entries, archiveBytes } : undefined
+  } catch {
     return undefined
   }
-  const stopWhenResolved = () => {
-    if (result()) stopped = true
-  }
-  const unzip = new Unzip(file => {
-    file.ondata = () => undefined
-    entries++
-    metadataBytes += Buffer.byteLength(file.name)
-    if (entries > LIMITS.archiveEntries || metadataBytes > ZIP_METADATA_BYTES) {
-      stopped = true
-      file.start()
-      return
-    }
-    hasContentTypes ||= file.name === '[Content_Types].xml'
-    hasWord ||= file.name.startsWith('word/')
-    hasExcel ||= file.name.startsWith('xl/')
-    hasPowerPoint ||= file.name.startsWith('ppt/')
-    if (file.name !== 'mimetype') {
-      file.start()
-      stopWhenResolved()
-      return
-    }
+}
 
-    let content = ''
-    const remaining = ZIP_METADATA_BYTES - metadataBytes
-    file.ondata = (error, chunk, final) => {
-      if (error || chunk.byteLength > ZIP_METADATA_BYTES - metadataBytes) {
-        stopped = true
-        file.terminate()
-        return
-      }
-      metadataBytes += chunk.byteLength
-      content += decoder.decode(chunk, { stream: !final })
-      if (final && content === 'application/epub+zip') {
-        epub = true
-        stopWhenResolved()
-      }
-    }
-    if (file.originalSize !== undefined && file.originalSize > remaining) {
-      stopped = true
-      file.ondata = () => file.terminate()
-    }
-    file.start()
-  })
-  unzip.register(UnzipInflate)
-  return {
-    unzip,
-    result,
-    stopped: () => stopped,
+function readZipEntryBytes(bytes: Uint8Array, entry: ZipEntry): Uint8Array | undefined {
+  const header = readLocalHeader(bytes, entry)
+  return header ? bytes.subarray(header.payloadOffset, header.payloadOffset + entry.compressedSize) : undefined
+}
+
+async function readZipEntryFromPath(path: string, entry: ZipEntry, signal: AbortSignal): Promise<Uint8Array | undefined> {
+  throwIfAborted(signal)
+  const handle = await open(path, 'r')
+  try {
+    const headerBytes = await readExactly(handle, 30, entry.localOffset, signal)
+    if (!headerBytes) return undefined
+    const header = readLocalHeader(headerBytes, entry, entry.localOffset)
+    if (!header || header.payloadOffset - entry.localOffset > ZIP_LOCAL_HEADER_BYTES) return undefined
+    return readExactly(handle, entry.compressedSize, header.payloadOffset, signal)
+  } finally {
+    await handle.close()
   }
+}
+
+function readLocalHeader(bytes: Uint8Array, entry: ZipEntry, baseOffset = 0): { payloadOffset: number } | undefined {
+  const offset = entry.localOffset - baseOffset
+  if (offset < 0 || offset + 30 > bytes.byteLength || readU32(bytes, offset) !== 0x04034b50) return undefined
+  const nameLength = readU16(bytes, offset + 26)
+  const extraLength = readU16(bytes, offset + 28)
+  const payloadOffset = entry.localOffset + 30 + nameLength + extraLength
+  if (payloadOffset + entry.compressedSize > baseOffset + bytes.byteLength && baseOffset === 0) return undefined
+  return { payloadOffset }
+}
+
+function decodeZipEntry(entry: ZipEntry, payload: Uint8Array): string | undefined {
+  try {
+    const bytes = entry.compression === 0 ? payload : entry.compression === 8 ? inflateSync(payload) : undefined
+    if (!bytes || bytes.byteLength !== entry.uncompressedSize || bytes.byteLength > EPUB_MIMETYPE_BYTES) return undefined
+    return new TextDecoder('utf-8', { fatal: true }).decode(bytes)
+  } catch {
+    return undefined
+  }
+}
+
+async function readExactly(handle: Awaited<ReturnType<typeof open>>, bytes: number, position: number, signal: AbortSignal): Promise<Uint8Array | undefined> {
+  if (bytes < 0 || bytes > ZIP_METADATA_BYTES + ZIP_LOCAL_HEADER_BYTES) return undefined
+  throwIfAborted(signal)
+  const buffer = Buffer.alloc(bytes)
+  const result = await handle.read(buffer, 0, bytes, position)
+  throwIfAborted(signal)
+  return result.bytesRead === bytes ? buffer : undefined
+}
+
+function readU16(bytes: Uint8Array, offset: number): number {
+  return bytes[offset]! | (bytes[offset + 1]! << 8)
+}
+
+function readU32(bytes: Uint8Array, offset: number): number {
+  return (bytes[offset]! | (bytes[offset + 1]! << 8) | (bytes[offset + 2]! << 16) | (bytes[offset + 3]! << 24)) >>> 0
 }
 
 function finalize(candidate: Candidate, safeName: string, declaredMime: string): DetectedFileType {
@@ -394,7 +459,7 @@ function hasMismatch(candidate: Candidate, safeName: string, declaredMime: strin
   const nameExtension = extname(safeName).toLowerCase()
   const extensionType = knownExtensionType(nameExtension)
   const extensionMismatch = extensionType !== undefined && extensionType !== candidate.kind
-  const mimeMismatch = declared !== '' && declared !== 'application/octet-stream' && declared !== candidate.mime.toLowerCase()
+  const mimeMismatch = declared !== '' && declared !== 'application/octet-stream' && !acceptedMimes(candidate).includes(declared)
   return extensionMismatch || mimeMismatch
 }
 
@@ -402,7 +467,8 @@ function knownExtensionType(extension: string): string | undefined {
   const mapping: Record<string, string> = {
     '.txt': 'text', '.json': 'config-json', '.jsonc': 'config-json', '.yaml': 'config-yaml', '.yml': 'config-yaml',
     '.ini': 'config-ini', '.toml': 'config-toml', '.pdf': 'pdf', '.zip': 'zip', '.7z': '7z', '.rar': 'rar',
-    '.png': 'png', '.docx': 'docx', '.xlsx': 'xlsx', '.pptx': 'pptx', '.epub': 'epub', '.ts': 'source-typescript',
+    '.png': 'png', '.jpg': 'jpeg', '.jpeg': 'jpeg', '.gif': 'gif', '.webp': 'webp', '.xml': 'config-xml',
+    '.docx': 'docx', '.xlsx': 'xlsx', '.pptx': 'pptx', '.epub': 'epub', '.ts': 'source-typescript',
     '.tsx': 'source-typescript', '.js': 'source-javascript', '.jsx': 'source-javascript', '.py': 'source-python',
     '.md': 'markdown', '.mdx': 'markdown', '.csv': 'csv', '.tsv': 'tsv', '.sql': 'sql', '.plist': 'plist',
     '.conf': 'config-ini', '.config': 'config-text', '.sh': 'shell', '.zsh': 'shell', '.bash': 'shell',
@@ -410,6 +476,19 @@ function knownExtensionType(extension: string): string | undefined {
     '.go': 'source-go', '.rs': 'source-rust', '.java': 'source-java',
   }
   return mapping[extension]
+}
+
+function acceptedMimes(candidate: Candidate): readonly string[] {
+  const aliases: Record<string, readonly string[]> = {
+    zip: ['application/zip', 'application/x-zip-compressed'],
+    'config-yaml': ['application/yaml', 'text/yaml', 'application/x-yaml'],
+    'source-javascript': ['text/plain', 'text/javascript', 'application/javascript', 'application/ecmascript', 'text/ecmascript'],
+    'source-typescript': ['text/plain', 'text/typescript', 'application/typescript'],
+    shell: ['text/plain', 'application/x-sh'],
+    'config-xml': ['application/xml', 'text/xml'],
+    plist: ['application/xml', 'application/x-plist'],
+  }
+  return aliases[candidate.kind] ?? [candidate.mime.toLowerCase()]
 }
 
 async function readHead(path: string, signal: AbortSignal): Promise<Uint8Array> {
