@@ -249,6 +249,8 @@ function classifyText(name: string, text: string, encoding: NonNullable<Candidat
 
   if (/^#!\s*(?:\/usr\/bin\/env\s+)?(?:\/(?:usr\/)?bin\/)?(?:bash|zsh|sh|dash|fish)\b/.test(trimmed)) kind = 'shell'
   else if (/^FROM\s+\S+/mi.test(text)) kind = 'dockerfile'
+  else if (/^\s*<!doctype\s+html\b/i.test(text) || /^\s*<html\b/i.test(text)) kind = 'html'
+  else if (/^\s*<svg\b/i.test(text)) kind = 'svg'
   else if (/^\s*<\?xml\b/i.test(text) || /^\s*<\w+[\s>]/.test(text)) kind = /<plist\b/i.test(text) ? 'plist' : 'config-xml'
   else if (looksJson(trimmed)) kind = 'config-json'
   else if (/^\s*(?:SELECT|INSERT|UPDATE|DELETE|CREATE|ALTER|DROP)\b/i.test(text)) kind = 'sql'
@@ -263,6 +265,8 @@ function classifyText(name: string, text: string, encoding: NonNullable<Candidat
   if (kind === 'config-json') mime = 'application/json'
   else if (kind === 'config-yaml') mime = 'application/yaml'
   else if (kind === 'config-xml' || kind === 'plist') mime = 'application/xml'
+  else if (kind === 'html') mime = 'text/html'
+  else if (kind === 'svg') mime = 'image/svg+xml'
   else if (kind === 'markdown') mime = 'text/markdown'
   else if (kind === 'csv') mime = 'text/csv'
   else if (kind === 'tsv') mime = 'text/tab-separated-values'
@@ -297,6 +301,12 @@ function extensionKind(name: string): string | undefined {
   switch (extname(name).toLowerCase()) {
     case '.json':
     case '.jsonc': return 'config-json'
+    case '.html':
+    case '.htm': return 'html'
+    case '.xml':
+    case '.xsd':
+    case '.rss': return 'config-xml'
+    case '.svg': return 'svg'
     case '.yaml':
     case '.yml': return 'config-yaml'
     case '.toml': return 'config-toml'
@@ -508,6 +518,7 @@ function knownExtensionType(extension: string): string | undefined {
     '.txt': 'text', '.json': 'config-json', '.jsonc': 'config-json', '.yaml': 'config-yaml', '.yml': 'config-yaml',
     '.ini': 'config-ini', '.toml': 'config-toml', '.pdf': 'pdf', '.zip': 'zip', '.7z': '7z', '.rar': 'rar',
     '.png': 'png', '.jpg': 'jpeg', '.jpeg': 'jpeg', '.gif': 'gif', '.webp': 'webp', '.xml': 'config-xml',
+    '.html': 'html', '.htm': 'html', '.svg': 'svg',
     '.docx': 'docx', '.xlsx': 'xlsx', '.pptx': 'pptx', '.epub': 'epub', '.doc': 'doc', '.xls': 'xls', '.ppt': 'ppt', '.wps': 'doc', '.rtf': 'rtf', '.odt': 'odt', '.ods': 'ods', '.odp': 'odp', '.ts': 'source-typescript',
     '.tsx': 'source-typescript', '.js': 'source-javascript', '.jsx': 'source-javascript', '.py': 'source-python',
     '.md': 'markdown', '.mdx': 'markdown', '.csv': 'csv', '.tsv': 'tsv', '.sql': 'sql', '.plist': 'plist',
@@ -527,6 +538,8 @@ function acceptedMimes(candidate: Candidate): readonly string[] {
     shell: ['text/plain', 'application/x-sh'],
     'config-xml': ['application/xml', 'text/xml'],
     plist: ['application/xml', 'application/x-plist'],
+    html: ['text/html', 'application/xhtml+xml', 'text/plain'],
+    svg: ['image/svg+xml', 'text/plain', 'application/xml', 'text/xml'],
   }
   return aliases[candidate.kind] ?? [candidate.mime.toLowerCase()]
 }

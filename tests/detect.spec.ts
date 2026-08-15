@@ -225,3 +225,29 @@ describe('detectFileFromPath', () => {
     }
   })
 })
+
+describe('markup detection (html / xml / svg / markdown)', () => {
+  it('detects html from DOCTYPE and from the .html extension', async () => {
+    expect(await text('page.html', '<!DOCTYPE html><html><body>hi</body></html>')).toMatchObject({ family: 'text', kind: 'html', mime: 'text/html', readable: true })
+    expect(await text('page.htm', 'plain text without markup')).toMatchObject({ kind: 'html' })
+  })
+
+  it('detects svg markup and keeps it readable as text', async () => {
+    expect(await text('logo.svg', '<svg xmlns="http://www.w3.org/2000/svg"><rect/></svg>')).toMatchObject({ family: 'text', kind: 'svg', mime: 'image/svg+xml', readable: true })
+  })
+
+  it('detects xml by content and by extension', async () => {
+    expect(await text('conf.xml', '<?xml version="1.0"?><root><item>1</item></root>')).toMatchObject({ kind: 'config-xml', mime: 'application/xml' })
+    expect(await text('data.rss', '<?xml version="1.0"?><rss><channel/></rss>')).toMatchObject({ kind: 'config-xml' })
+  })
+
+  it('detects markdown by heading and by extension', async () => {
+    expect(await text('notes.md', '# Title\n\nBody')).toMatchObject({ family: 'text', kind: 'markdown', mime: 'text/markdown', readable: true })
+  })
+
+  it('flags html content inside a .txt name as a type mismatch', async () => {
+    const result = await text('note.txt', '<!DOCTYPE html><html></html>')
+    expect(result.kind).toBe('html')
+    expect(result.mismatch).toBe(true)
+  })
+})
