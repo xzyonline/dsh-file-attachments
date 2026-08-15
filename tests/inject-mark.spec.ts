@@ -1,5 +1,5 @@
 import { describe, expect, it, vi } from 'vitest'
-import { createInjectionHandler, MARK_PREFIX, REPLAY_WINDOW_MS } from '../src/inject-mark.ts'
+import { createInjectionHandler, MARK_PREFIX } from '../src/inject-mark.ts'
 
 interface FakeAttachment {
   id: string
@@ -8,90 +8,116 @@ interface FakeAttachment {
   detected: { family: string; kind: string }
 }
 
+interface FakeMessage {
+  content: { type: string; text?: string }[]
+}
+
 function fakeAttachment(id: string, createdAt: number): FakeAttachment {
   return { id, safeName: `${id}.txt`, createdAt, detected: { family: 'text', kind: 'plain' } }
 }
 
-function harness(attachments: () => Promise<FakeAttachment[]>) {
-  const injected: unknown[] = []
-  const agent = { id: 'session-1', inject: (message: unknown) => injected.push(message) }
-  const store = { listLatestBySession: vi.fn(attachments) } as never
-  const handler = createInjectionHandler(store)
-  return { handler, injected, agent }
+const ID_A = 'att_' + 'a'.repeat(32)
+const ID_B = 'att_' + 'b'.repeat(32)
+const ID_C = 'att_' + 'c'.repeat(32)
+
+function historyMessage(text: string): FakeMessage {
+  return { content: [{ type: 'text', text }] }
 }
 
-describe('createInjectionHandler', () => {
-  it('announces fresh attachments once, then stays silent for the same session', async () => {
-    const base = Date.now() - 1_000
-    const { handler, injected, agent } = harness(async () => [fakeAttachment('att-a', base)])
-    await handler({ agent })
-    await handler({ agent })
-    expect(injected).toHaveLength(1)
-    const message = injected[0]! as { content: { text: string }[]; source: { kind: string; plugin: string } }
-    expect(message.content[0]!.text).toContain(MARK_PREFIX)
-    expect(message.content[0]!.text).toContain('att-a')
-    expect(message.content[0]!.text).toContain('text/plain')
-    expect(message.content[0]!.text).toContain('attachment_info')
-    expect(message.source.kind).toBe('plugin')
-    expect(message.source.plugin).toBe('dsh-file-attachments')
+/** A projected history line announcing the given ids (as persisted by a previous step). */
+function announceLine(ids: string[]): string {
+  return `${MARK_PREFIX} 用户为本次对话上传了文件：${ids.join('、')}。请先调用 attachment_info()`
+}
+
+function harness(attachments: () => Promise<FakeAttachment[]>) {
+  const store = { listLatestBySession: vi.fn(attachments) } as never
+  const handler = createInjectionHandler(store)
+  return { handler }
+}
+
+async function run(handler: ReturnType<typeof createInjectionHandler>, messages: FakeMessage[], step = 0) {
+  const next = vi.fn(async () => ({ kind: 'enter' as const, messages: [...messages] }))
+  const decision = (await handler({ agent: { id: 'session-1' }, step, messages }, next)) as { kind: string; messages: unknown[] }
+  return { decision, messages: (decision.messages ?? []) as FakeMessage[] }
+}
+
+describe('createInjectionHandler (pre-step waterfall)', () => {
+  it('appends one announcement line on the first step and never repeats it', async () => {
+    const { handler } = harness(async () => [fakeAttachment(ID_A, 1)])
+    const first = await run(handler, [historyMessage('user text')])
+    expect(first.messages).toHaveLength(2)
+    const injected = first.messages[1]!.content[0]!.text!
+    expect(injected).toContain(MARK_PREFIX)
+    expect(injected).toContain(ID_A)
+    expect(injected).toContain('text/plain')
+    expect(injected).toContain('attachment_info')
+    const source = (first.messages[1]! as unknown as { source: { kind: string; plugin: string } }).source
+    expect(source.kind).toBe('plugin')
+    expect(source.plugin).toBe('dsh-file-attachments')
+
+    const second = await run(handler, [historyMessage('next turn')])
+    expect(second.messages).toHaveLength(1)
   })
 
-  it('announces new uploads that arrive after the previous watermark', async () => {
-    const base = Date.now() - 1_000
-    let list = [fakeAttachment('att-a', base)]
-    const { handler, injected, agent } = harness(async () => list)
-    await handler({ agent })
-    list = [fakeAttachment('att-a', base), fakeAttachment('att-b', base + 500)]
-    await handler({ agent })
-    expect(injected).toHaveLength(2)
-    const second = injected[1]! as { content: { text: string }[] }
-    expect(second.content[0]!.text).toContain('att-b')
-    expect(second.content[0]!.text).not.toContain('att-a')
+  it('announces only files whose ids are missing from projected history after a restart', async () => {
+    // Simulates a process restart: the watermark map is gone, but history carries
+    // the previous announcement line containing ID_A.
+    const { handler } = harness(async () => [fakeAttachment(ID_A, 1), fakeAttachment(ID_B, 2)])
+    const first = await run(handler, [historyMessage(announceLine([ID_A])), historyMessage('user text')])
+    expect(first.messages).toHaveLength(3)
+    const injected = first.messages[2]!.content[0]!.text!
+    expect(injected).toContain(ID_B)
+    expect(injected).not.toContain(ID_A)
   })
 
-  it('never replays history after a restart: only the replay window is announced', async () => {
-    const base = Date.now()
-    const old = fakeAttachment('att-old', base - 2 * REPLAY_WINDOW_MS)
-    const recent = fakeAttachment('att-recent', base - 1_000)
-    const { handler, injected, agent } = harness(async () => [recent, old])
-    await handler({ agent })
-    expect(injected).toHaveLength(1)
-    const text = (injected[0]! as { content: { text: string }[] }).content[0]!.text
-    expect(text).toContain('att-recent')
-    expect(text).not.toContain('att-old')
+  it('announces files uploaded before a restart that were never announced, however old', async () => {
+    // Bug fix: the old window heuristic silently dropped unannounced files older
+    // than 10 minutes after a restart. History has no announcement line here.
+    const old = fakeAttachment(ID_C, Date.now() - 60 * 60 * 1000)
+    const { handler } = harness(async () => [old])
+    const first = await run(handler, [historyMessage('user text')])
+    expect(first.messages).toHaveLength(2)
+    expect(first.messages[1]!.content[0]!.text!).toContain(ID_C)
   })
 
-  it('injects nothing when the session has no attachments', async () => {
-    const { handler, injected, agent } = harness(async () => [])
-    await handler({ agent })
-    expect(injected).toHaveLength(0)
+  it('returns the decision unchanged when the session has no attachments', async () => {
+    const { handler } = harness(async () => [])
+    const { decision, messages } = await run(handler, [historyMessage('user text')])
+    expect(messages).toHaveLength(1)
+    expect(decision.kind).toBe('enter')
   })
 
-  it('never throws when inject or the store fails (emit listener must be inert)', async () => {
-    const { handler, agent } = harness(async () => {
+  it('never disturbs tool-continuation steps (step !== 0)', async () => {
+    const { handler } = harness(async () => [fakeAttachment(ID_A, 1)])
+    const { messages } = await run(handler, [historyMessage('user text')], 1)
+    expect(messages).toHaveLength(1)
+  })
+
+  it('returns the decision unchanged when the store fails', async () => {
+    const { handler } = harness(async () => {
       throw new Error('store down')
     })
-    await expect(handler({ agent })).resolves.toBeUndefined()
-    const throwing = harness(async () => [fakeAttachment('att-x', Date.now())])
-    throwing.agent.inject = () => {
-      throw new Error('inject down')
-    }
-    await expect(throwing.handler({ agent: throwing.agent })).resolves.toBeUndefined()
+    const { decision, messages } = await run(handler, [historyMessage('user text')])
+    expect(decision.kind).toBe('enter')
+    expect(messages).toHaveLength(1)
   })
 
-  it('bundles every same-batch file into one announcement line', async () => {
-    const base = Date.now() - 1_000
-    const { handler, injected, agent } = harness(async () => [
-      fakeAttachment('att-1', base),
-      fakeAttachment('att-2', base),
-      fakeAttachment('att-3', base),
-    ])
-    await handler({ agent })
-    expect(injected).toHaveLength(1)
-    const text = (injected[0]! as { content: { text: string }[] }).content[0]!.text
-    expect(text).toContain('att-1')
-    expect(text).toContain('att-2')
-    expect(text).toContain('att-3')
-    expect(text).toContain('3 个文件')
+  it('returns a reject decision untouched', async () => {
+    const { handler } = harness(async () => [fakeAttachment(ID_A, 1)])
+    const next = vi.fn(async () => ({ kind: 'reject' as const }))
+    const decision = (await handler({ agent: { id: 'session-1' }, step: 0, messages: [] }, next)) as { kind: string }
+    expect(decision.kind).toBe('reject')
+    expect(next).toHaveBeenCalledOnce()
+  })
+
+  it('bundles every unannounced file into one announcement line', async () => {
+    const { handler } = harness(async () => [fakeAttachment(ID_A, 1), fakeAttachment(ID_B, 2), fakeAttachment(ID_C, 3)])
+    const first = await run(handler, [historyMessage('user text')])
+    expect(first.messages).toHaveLength(2)
+    const injected = first.messages[1]!.content[0]!.text!
+    expect(injected).toContain(ID_A)
+    expect(injected).toContain(ID_B)
+    expect(injected).toContain(ID_C)
+    expect(injected).toContain('3 个文件')
   })
 })

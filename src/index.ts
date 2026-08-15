@@ -11,7 +11,7 @@ export const ATTACHMENT_PROMPT = 'When any user message mentions a file, upload,
 
 export interface PluginContext {
   effect(factory: () => () => void, label: string): void
-  on(event: string, handler: (payload: { agent: { id: string; inject(message: unknown): void } }) => Promise<void> | void): () => void
+  on(event: string, handler: (payload: { agent: { id: string }; step: number }, next: () => Promise<unknown>) => Promise<unknown> | unknown): () => void
   webServer: { host: string; port: number; register(config: unknown): () => void }
   tools: { register(definition: import('./tools.ts').ToolDefinition): () => void }
   systemPrompt: { section(config: { name: string; order: number; text: string }): () => void }
@@ -25,7 +25,7 @@ export function apply(ctx: PluginContext, config: Config = {}): void {
   ctx.effect(() => registerAttachmentRoutes(ctx, store), 'file-attachments.http')
   ctx.effect(() => registerAttachmentTools(ctx, store), 'file-attachments.tools')
   ctx.effect(() => ctx.systemPrompt.section({ name: 'tool:dsh-file-attachments', order: 70, text: ATTACHMENT_PROMPT }), 'file-attachments.prompt')
-  ctx.effect(() => ctx.on('agent/inbox/inserted', createInjectionHandler(store)), 'file-attachments.mark')
+  ctx.effect(() => ctx.on('agent/pre-step', createInjectionHandler(store) as never), 'file-attachments.mark')
 }
 
 export default { name, inject, apply }
