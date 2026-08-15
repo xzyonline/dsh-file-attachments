@@ -1,6 +1,10 @@
 /**
  * dsh-file-attachments 一键部署(跨平台:macOS / Windows / Linux)
  *
+ * 归因:符号链接失败时回退 Windows 目录联接(junction)、以及"链接前校验目标是否已是正确包"的
+ * 策略,参考 @linxin666/dsh-client-ui-skin-center(dsh-web-ui,zhu1090093659,Apache-2.0)的
+ * ensureSymlink 实现;补丁幂等写入/备份为插件社区通行做法。其余为本项目原创。
+ *
  * 用法:
  *   node scripts/install.mjs                 # 默认 profile=web
  *   node scripts/install.mjs --profile web   # 指定 profile

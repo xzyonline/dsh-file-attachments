@@ -19,6 +19,7 @@
 ![dsh-file-attachments 运行效果(本地演示)](./docs/screenshots/overview.jpg)
 
 > *本地运行演示:输入框「添加文件」、按类型区分的附件卡片、消息气泡下方的三态回执。*
+> *截图中界面皮肤为第三方作品「深海女仆工坊 maid-atelier」([Small-tailqwq/dsh-deep-whale](https://github.com/Small-tailqwq/dsh-deep-whale),CC BY-NC-SA 4.0;角色原作:上善,二创:ZipZipPipe,三创:Small-tailqwq)——仅为演示皮肤,不随本插件分发。*
 > **预期**:回执三阶段为
 > `✓ Agent 已收到 · 文件名`(发送瞬间)→ `✓ Agent 正在读取…`(模型调用读取工具时)→ `✓ Agent 已读取 · 文件名`(读取完成,文字变主题成功色)。
 > 检测按「回合号 + 附件 id」精确匹配,模型没读就一直停留在「已收到」——**诚实,不造假**。

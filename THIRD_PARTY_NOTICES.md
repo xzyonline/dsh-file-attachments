@@ -20,6 +20,14 @@
 
 注：`fast-xml-parser` 曾为依赖，因零引用（死依赖）已于 2026-08-15 移除。
 
+## 复刻与参考声明（非依赖，仅引用/借鉴，不据为己有）
+
+| 对象 | 许可证 | 用途 | 上游 |
+|---|---|---|---|
+| DeepSeek Harness 官方客户端包 `@deepseek-ai/dsh-client-ui-conversation` 的 UserMessageNodeView（contentParts / projectText 正文与引用高亮逻辑） | MIT（同仓库） | `src/client/UserMessageWithReceipt.tsx` 复刻其用户消息渲染，以在气泡下方附加附件回执；已在源码头注释归因 | [deepseek-ai/deepseek-harness](https://github.com/deepseek-ai/deepseek-harness) |
+| `@linxin666/dsh-client-ui-skin-center` 的 ensureSymlink（Windows 目录联接回退与链接校验策略） | Apache-2.0 | `scripts/install.mjs` 参考其链接策略；已在脚本头注释归因 | [zhu1090093659/dsh-web-ui](https://github.com/zhu1090093659/dsh-web-ui) |
+| 「深海女仆工坊 maid-atelier」皮肤（仅出现在 README 演示截图中，不随本插件分发） | CC BY-NC-SA 4.0 | 界面演示皮肤；署名链：角色原作 **上善**（[Pixiv](https://www.pixiv.net/users/62155430) / [Bilibili](https://b23.tv/8h5L4xz)）→ 二创 **ZipZipPipe**（[Pixiv](https://www.pixiv.net/users/18604994) / [Bilibili](https://b23.tv/Pnw6nG8)）→ 三创 **Small-tailqwq** | [Small-tailqwq/dsh-deep-whale](https://github.com/Small-tailqwq/dsh-deep-whale) |
+
 ## dsh-vision（识图）
 
 | 依赖 | 许可证 | 用途 | 上游项目 |

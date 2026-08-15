@@ -1,6 +1,13 @@
 import React, { useEffect, useState } from 'react'
 import type { SentAttachmentReceipt } from './store.ts'
 
+/**
+ * 归因:本组件的用户消息渲染(正文拼接 contentParts、/skill 与 @subagent 引用高亮 projectText、
+ * 图片块/附加数据块的分类逻辑)复刻自 DeepSeek Harness 官方客户端包
+ * `@deepseek-ai/dsh-client-ui-conversation` 的 UserMessageNodeView(同仓库 MIT 许可),
+ * 仅为在其气泡下方附加附件回执而重新实现;其余部分为本项目原创。
+ */
+
 /** 用户消息内容块(与官方 contentParts 的最小契约一致)。 */
 interface UserContentBlock { type?: string; text?: string; attachment?: unknown; [key: string]: unknown }
 
