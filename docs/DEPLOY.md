@@ -1,10 +1,21 @@
-# 部署指南（macOS / Windows / Linux 分步详解）
+# 部署指南（macOS / Windows / Linux）
 
-本文是 `scripts/install.mjs` 一键部署的逐步拆解:每一步做什么、遇到问题怎么办、如何验证与卸载。
+## ⭐ 方式一:下载预构建包(推荐,无需 git/构建)
 
-## ⭐ 双击即装(零命令)
+1. 从 [Releases](https://github.com/xzyonline/dsh-file-attachments/releases) 下载 `dsh-file-attachments-0.1.0.zip`,用 `SHA256SUMS.txt` 校验:
+   ```sh
+   shasum -a 256 dsh-file-attachments-0.1.0.zip   # macOS/Linux
+   certutil -hashfile dsh-file-attachments-0.1.0.zip SHA256   # Windows PowerShell
+   ```
+2. 解压到任意目录;
+3. 双击安装:**Windows 双击 `install.bat`;macOS/Linux 双击 `install.command`**;
+4. 重启 dsh web → 浏览器硬刷新(macOS `Cmd+Shift+R` / Windows `Ctrl+Shift+R`)→ 输入框出现「添加文件」即成功。
 
-下载源码并解压后,只需**双击一个文件**,依赖安装、构建、链接、写补丁全自动完成:
+> 预构建包已含 `lib/` 产物,双击脚本会自动跳过构建;卸载双击 `uninstall.bat` / `uninstall.command`。
+
+## 方式二:源码部署
+
+前置:Node.js ≥ 20。克隆源码后:
 
 | 平台 | 双击文件 | 说明 |
 |---|---|---|
