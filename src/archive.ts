@@ -1,3 +1,4 @@
+import { existsSync } from 'node:fs'
 import { spawn } from 'node:child_process'
 import { AttachmentError } from './errors.ts'
 import { detectFile } from './detect.ts'
@@ -5,10 +6,16 @@ import { redactSensitiveText } from './redact.ts'
 import { LIMITS } from './shared/contracts.ts'
 
 export type ArchiveRunner = (
-  file: '/usr/bin/tar',
+  file: string,
   args: readonly string[],
   options: { signal: AbortSignal; timeoutMs: number; maxStdout: number; maxStderr: number },
 ) => Promise<{ stdout: Buffer; stderr: Buffer; code: number }>
+
+/** macOS/Linux 优先用系统 tar(版本稳定的 bsdtar);Windows 10+ 自带 C:\Windows\System32\tar.exe(bsdtar),从 PATH 解析。 */
+export function resolveTarBinary(): string {
+  if (existsSync('/usr/bin/tar')) return '/usr/bin/tar'
+  return 'tar'
+}
 
 export interface ArchiveEntry {
   path: string
@@ -33,7 +40,7 @@ export function normalizeArchivePath(value: string): string {
 }
 
 export async function listArchive(path: string, request: { cursor?: number; limit?: number; prefix?: string } = {}, signal: AbortSignal, runner: ArchiveRunner = runArchiveCommand): Promise<ArchivePage> {
-  const result = await runner('/usr/bin/tar', ['-tf', path], { signal, timeoutMs: LIMITS.archiveTimeoutMs, maxStdout: LIMITS.readBytes, maxStderr: LIMITS.readBytes })
+  const result = await runner(resolveTarBinary(), ['-tf', path], { signal, timeoutMs: LIMITS.archiveTimeoutMs, maxStdout: LIMITS.readBytes, maxStderr: LIMITS.readBytes })
   if (result.code !== 0) throw new AttachmentError('CORRUPT_FILE', result.stderr.toString() || '无法读取归档目录')
   const seen = new Set<string>()
   const entries: ArchiveEntry[] = []
@@ -52,9 +59,9 @@ export async function listArchive(path: string, request: { cursor?: number; limi
 
 export async function readArchiveEntry(handle: ArchiveHandle, entryPath: string, signal: AbortSignal, runner: ArchiveRunner = runArchiveCommand): Promise<{ kind: 'archive-entry'; text: string; range: Record<string, string | number>; hasMore: boolean; redacted: number; truncated: boolean }> {
   const normalized = normalizeArchivePath(entryPath)
-  const listing = await runner('/usr/bin/tar', ['-tvf', handle.path], { signal, timeoutMs: LIMITS.archiveTimeoutMs, maxStdout: LIMITS.readBytes, maxStderr: LIMITS.readBytes })
+  const listing = await runner(resolveTarBinary(), ['-tvf', handle.path], { signal, timeoutMs: LIMITS.archiveTimeoutMs, maxStdout: LIMITS.readBytes, maxStderr: LIMITS.readBytes })
   if (listing.code !== 0 || !isRegularEntry(listing.stdout.toString('utf8'), normalized)) throw new AttachmentError('ARCHIVE_PATH_REJECTED', '归档条目不是普通文件或不存在')
-  const extracted = await runner('/usr/bin/tar', ['-xOf', handle.path, '--', normalized], { signal, timeoutMs: LIMITS.archiveTimeoutMs, maxStdout: LIMITS.fileBytes, maxStderr: LIMITS.readBytes })
+  const extracted = await runner(resolveTarBinary(), ['-xOf', handle.path, '--', normalized], { signal, timeoutMs: LIMITS.archiveTimeoutMs, maxStdout: LIMITS.fileBytes, maxStderr: LIMITS.readBytes })
   if (extracted.code !== 0) throw new AttachmentError('CORRUPT_FILE', extracted.stderr.toString('utf8') || '无法提取归档条目')
   const detected = await detectFile({ name: normalized, declaredMime: handle.declaredMime ?? '', bytes: extracted.stdout })
   if (!detected.readable && detected.family !== 'text') throw new AttachmentError('UNSUPPORTED_FILE_TYPE', `归档条目 ${detected.kind} 暂不支持读取`)
@@ -83,7 +90,7 @@ function posixPathNormalize(value: string): string {
   return parts.join('/') || '.'
 }
 
-async function runArchiveCommand(file: '/usr/bin/tar', args: readonly string[], options: { signal: AbortSignal; timeoutMs: number; maxStdout: number; maxStderr: number }): Promise<{ stdout: Buffer; stderr: Buffer; code: number }> {
+async function runArchiveCommand(file: string, args: readonly string[], options: { signal: AbortSignal; timeoutMs: number; maxStdout: number; maxStderr: number }): Promise<{ stdout: Buffer; stderr: Buffer; code: number }> {
   return new Promise((resolve, reject) => {
     const child = spawn(file, [...args], { shell: false, detached: true })
     const stdout: Buffer[] = []

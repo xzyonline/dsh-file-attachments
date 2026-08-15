@@ -17,11 +17,15 @@ describe('built client bundle', () => {
     expect(bundle).toContain('classifyClipboardItems')
   })
 
-  it('wires the in-turn tail receipt and keeps the legacy receipt out', async () => {
+  it('wires the user-bubble receipt and keeps the legacy banners out', async () => {
     const bundle = await readFile(join(process.cwd(), 'lib', 'client.js'), 'utf8')
-    expect(bundle).toContain('conversation.chat.turnTail')
-    expect(bundle).toContain('claimTail')
-    expect(bundle).toContain('turn-attachment-receipt')
+    expect(bundle).toContain('conversation.chat.node')
+    expect(bundle).toMatch(/key: "user",\s*priority: -1/)
+    expect(bundle).toContain('user-bubble-receipt')
+    expect(bundle).toContain('Agent 已收到')
+    expect(bundle).toContain('Agent 已读取')
     expect(bundle).not.toContain('sent-attachment-receipt')
+    expect(bundle).not.toContain('conversation.chat.turnTail')
+    expect(bundle).not.toContain('sent-inline-receipt')
   })
 })

@@ -40,29 +40,14 @@ describe('attachment draft store', () => {
     expect(store.sent('session-a')).toEqual({ draft: uploaded.draft, files: [uploaded.metadata] })
   })
 
-  it('routes the turn-tail announcement to the claiming turn only', async () => {
+  it('clears the sent receipt when a new upload starts', async () => {
     const store = createAttachmentDraftStore(fakeApi())
     const uploaded = await store.upload('session-a', '', file('app.config', 'x=1'))
     store.observeDraft('session-a', uploaded.draft)
     store.observeDraft('session-a', '')
-
-    expect(store.tailSelect(1)).toEqual({ turn: 1 })
-    expect(store.tailSelect(2)).toEqual({ turn: 2 })
-    expect(store.claimTail('session-b', 2)).toBeUndefined()
-    expect(store.tailSelect(3)).toEqual({ turn: 3 })
-    expect(store.claimTail('session-a', 3)).toEqual({ draft: uploaded.draft, files: [uploaded.metadata] })
-    expect(store.tailSelect(4)).toBeNull()
-    expect(store.tailSelect(3)).toEqual({ turn: 3 })
-  })
-
-  it('clears the turn-tail announcement when a new upload starts', async () => {
-    const store = createAttachmentDraftStore(fakeApi())
-    const uploaded = await store.upload('session-a', '', file('app.config', 'x=1'))
-    store.observeDraft('session-a', uploaded.draft)
-    store.observeDraft('session-a', '')
-    expect(store.tailSelect(1)).not.toBeNull()
+    expect(store.sent('session-a')).not.toBeUndefined()
     await store.upload('session-a', '', file('b.txt', 'b'))
-    expect(store.tailSelect(1)).toBeNull()
+    expect(store.sent('session-a')).toBeUndefined()
   })
 
   it('removes the invisible composer sentinel with the last attachment', async () => {

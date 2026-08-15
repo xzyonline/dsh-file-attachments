@@ -2,7 +2,8 @@ import React from 'react'
 import { describe, expect, it } from 'vitest'
 import { FileAttachButton } from '../src/client/FileAttachButton.tsx'
 import { FileAttachmentDock } from '../src/client/FileAttachmentDock.tsx'
-import { TurnAttachmentReceipt } from '../src/client/TurnAttachmentReceipt.tsx'
+import { UserMessageWithReceipt } from '../src/client/UserMessageWithReceipt.tsx'
+import { apply as applyClient } from '../src/client.tsx'
 import { classifyDrop } from '../src/client/drop.ts'
 import { classifyClipboardItems } from '../src/client/paste.ts'
 import type { AttachmentMetadata } from '../src/shared/contracts.ts'
@@ -17,6 +18,27 @@ const attachment = (overrides: Partial<AttachmentMetadata> = {}): AttachmentMeta
 })
 
 describe('attachment client UI', () => {
+  it('registers the user chat override with a lower priority than the built-in entry', () => {
+    const registrations: Array<{ name: string; key?: string; priority?: number }> = []
+    applyClient({
+      slots: {
+        inject(_name: string, factory: () => unknown) { factory() },
+        register(definition: { name: string; key?: string; priority?: number }) {
+          registrations.push(definition)
+          return () => void 0
+        },
+      },
+    })
+
+    expect(registrations).toContainEqual(expect.objectContaining({
+      name: 'conversation.chat.node',
+      key: 'user',
+      priority: expect.any(Number),
+    }))
+    // keyed 槽位:同 key 同 priority 抛错;胜者为 priority 最小者,官方为 0,须小于 0
+    expect(registrations.find(entry => entry.name === 'conversation.chat.node')?.priority).toBeLessThan(0)
+  })
+
   it('exposes an accessible file button and forwards selected non-images', () => {
     const selected: File[] = []
     const fragment = FileAttachButton({ onFiles: files => selected.push(...files) })
@@ -91,12 +113,31 @@ describe('attachment client UI', () => {
     expect(chip.props.style).toMatchObject({ flex: '0 1 320px', maxWidth: '100%' })
   })
 
-  it('renders the quiet in-turn receipt with the sent file names', () => {
-    const element = TurnAttachmentReceipt({ receipt: { draft: '解释这个文件', files: [attachment(), attachment({ id: 'att_other', safeName: 'a.xlsx' })] } })
+  it('renders the quiet receipt under the user bubble that carried the files', () => {
+    const drafts = { sent: () => ({ draft: '读一下这个', files: [attachment()] }) }
+    const element = UserMessageWithReceipt({ node: { data: { content: [{ type: 'text', text: '读一下这个' }], time: 1 } }, sessionId: 'session-a', drafts })
     const text = JSON.stringify(element)
-    expect(element.props['data-testid']).toBe('turn-attachment-receipt')
-    expect(text).toContain('已发送给 Agent')
+    expect(text).toContain('user-bubble-receipt')
+    expect(text).toContain('Agent 已收到')
     expect(text).toContain('dsp修改日志端口.wps')
-    expect(text).toContain('a.xlsx')
+  })
+
+  it('upgrades the receipt when the agent has read the file', () => {
+    const drafts = { sent: () => ({ draft: '读一下这个', files: [attachment()] }) }
+    const element = UserMessageWithReceipt({
+      node: { data: { content: [{ type: 'text', text: '读一下这个' }], time: 1 }, location: { kind: 'turn', turn: { turn: 3 } } },
+      sessionId: 'session-a',
+      useSession: (selector) => selector({ runningCalls: [], chat: { nodes: { values: () => [{ kind: 'assistant-step', location: { kind: 'step', turn: { turn: 3 } }, data: { blocks: [{ kind: 'tool-call', name: 'read_attachment', argsRaw: '{"attachment_id":"att_abcdef"}' }] } }] } } }),
+      drafts,
+    })
+    const receiptNode = (React.Children.toArray((React.Children.toArray(element.props.children)[0] as React.ReactElement).props.children) as React.ReactElement[]).find(child => child.props['data-testid'] === 'user-bubble-receipt')
+    expect(receiptNode!.props['data-read-signal']).toBe('read')
+    expect(JSON.stringify(element)).toContain('Agent 已读取')
+  })
+
+  it('keeps the receipt off unrelated user bubbles', () => {
+    const drafts = { sent: () => ({ draft: '另一个草稿', files: [attachment()] }) }
+    const element = UserMessageWithReceipt({ node: { data: { content: [{ type: 'text', text: '这条没带文件' }] } }, sessionId: 'session-a', drafts })
+    expect(JSON.stringify(element)).not.toContain('Agent 已收到')
   })
 })

@@ -16,18 +16,8 @@ export function createAttachmentDraftStore(api: AttachmentApi, storage: Storage 
   upload(sessionId: string, draft: string, file: File): Promise<{ metadata: AttachmentMetadata; draft: string }>
   remove(sessionId: string, id: string, draft: string): Promise<string>
   removeMarker(draft: string, id: string): string
-  /** 回合尾链的纯路由选择器:只有存在待展示回执时才匹配,认领后锁定在认领回合。 */
-  tailSelect(turn: number): unknown
-  /** 回合尾组件挂载时认领回执:会话不符返回 undefined(不消耗公告)。 */
-  claimTail(sessionId: string, turn: number): SentAttachmentReceipt | undefined
 } {
   const sessions = new Map<string, SessionState>()
-  let turnAnnouncement: { sessionId: string; receipt: SentAttachmentReceipt } | null = null
-  let turnAnnouncementTurn: number | null = null
-  const clearAnnouncement = (): void => {
-    turnAnnouncement = null
-    turnAnnouncementTurn = null
-  }
   const state = (sessionId: string): SessionState => {
     const found = sessions.get(sessionId)
     if (found) return found
@@ -54,8 +44,6 @@ export function createAttachmentDraftStore(api: AttachmentApi, storage: Storage 
       const value = state(sessionId)
       if (draft === '' && (value.pending || value.lastDraft !== '')) {
         value.sent = value.files.length > 0 ? { draft: value.lastDraft, files: [...value.files] } : undefined
-        turnAnnouncement = value.files.length > 0 ? { sessionId, receipt: { draft: value.lastDraft, files: [...value.files] } } : null
-        turnAnnouncementTurn = null
         value.batchId = newBatchId()
         value.pending = false
         value.files = []
@@ -69,7 +57,6 @@ export function createAttachmentDraftStore(api: AttachmentApi, storage: Storage 
       if (file.size > 25 * 1024 * 1024) throw new Error('FILE_TOO_LARGE: 文件超过 25 MB')
       const value = state(sessionId)
       value.sent = undefined
-      clearAnnouncement()
       const metadata = await api.uploadFile({ sessionId, batchId: value.batchId, file, signal: new AbortController().signal })
       value.files.push(metadata)
       value.pending = true
@@ -88,16 +75,6 @@ export function createAttachmentDraftStore(api: AttachmentApi, storage: Storage 
       return nextDraft === ATTACHMENT_DRAFT_SENTINEL ? '' : nextDraft
     },
     removeMarker: removeAttachmentMarker,
-    tailSelect(turn: number): unknown {
-      if (turnAnnouncement === null) return null
-      if (turnAnnouncementTurn !== null && turnAnnouncementTurn !== turn) return null
-      return { turn }
-    },
-    claimTail(sessionId: string, turn: number): SentAttachmentReceipt | undefined {
-      if (turnAnnouncement === null || turnAnnouncement.sessionId !== sessionId) return undefined
-      turnAnnouncementTurn = turn
-      return { draft: turnAnnouncement.receipt.draft, files: [...turnAnnouncement.receipt.files] }
-    },
   }
 }
 

@@ -1,9 +1,9 @@
 import React, { useCallback, useEffect, useRef, useState } from 'react'
 import { createAttachmentApi } from './client/api.ts'
-import { createAttachmentDraftStore, type SentAttachmentReceipt } from './client/store.ts'
+import { createAttachmentDraftStore } from './client/store.ts'
 import { FileAttachButton } from './client/FileAttachButton.tsx'
 import { FileAttachmentDock } from './client/FileAttachmentDock.tsx'
-import { TurnAttachmentReceipt } from './client/TurnAttachmentReceipt.tsx'
+import { UserMessageWithReceipt, type UserNodeOwnerProps } from './client/UserMessageWithReceipt.tsx'
 import { installFileDrop } from './client/drop.ts'
 import { installFilePaste } from './client/paste.ts'
 
@@ -95,30 +95,13 @@ function AttachmentDock(props: InputZoneProps & { drafts: ReturnType<typeof crea
   </>
 }
 
-interface TurnTailProps {
-  sessionId: string
-  matched: { turn: number }
-  drafts: ReturnType<typeof createAttachmentDraftStore>
-}
-
-/** 回合尾回执:挂载时认领本会话的发送公告,渲染沉静单行。 */
-function TurnTailEntry(props: TurnTailProps): React.ReactElement | null {
-  const [receipt, setReceipt] = useState<SentAttachmentReceipt | null>(null)
-
-  useEffect(() => {
-    const claimed = props.drafts.claimTail(props.sessionId, props.matched.turn)
-    if (claimed !== undefined) setReceipt(claimed)
-  }, [props.drafts, props.sessionId, props.matched.turn])
-
-  if (receipt === null) return null
-  return <TurnAttachmentReceipt receipt={receipt} />
-}
-
 export function apply(ctx: ClientContext): void {
   const drafts = createAttachmentDraftStore(createAttachmentApi())
   ctx.slots.inject('conversation.input.left', () => ctx.slots.register({ name: 'conversation.input.left', id: 'dsh-file-attach', order: 90, label: '添加文件' }, props => <AttachmentInput {...props as InputZoneProps} drafts={drafts} />))
   ctx.slots.inject('conversation.input.dock', () => ctx.slots.register({ name: 'conversation.input.dock', id: 'dsh-file-attachments', order: 90, label: '文件附件' }, props => <AttachmentDock {...props as InputZoneProps} drafts={drafts} />))
-  ctx.slots.inject('conversation.chat.turnTail', () => ctx.slots.register({ name: 'conversation.chat.turnTail', select: (owner: { turn: { turn: number } }) => drafts.tailSelect(owner.turn.turn) }, props => <TurnTailEntry {...props as TurnTailProps} drafts={drafts} />))
+  // 接管 user 消息节点:在携带附件的那条用户气泡下方渲染沉静回执(官方惯例)
+  // keyed 槽位同 key 同 priority 会抛错;胜者为 priority 最小者,官方条目为 0,故用 -1 影子接管
+  ctx.slots.inject('conversation.chat.node', () => ctx.slots.register({ name: 'conversation.chat.node', key: 'user', priority: -1, label: '用户消息(带附件回执)' }, props => <UserMessageWithReceipt {...props as UserNodeOwnerProps} drafts={drafts} />))
 }
 
 export default { inject, apply }
