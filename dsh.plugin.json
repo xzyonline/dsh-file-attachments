@@ -1,6 +1,6 @@
 {
   "id": "@dsh-external/dsh-file-attachments",
-  "version": "0.1.0",
+  "version": "0.2.0",
   "main": "./lib/index.js",
   "description": "Session-safe generic file attachments for DeepSeek Harness",
   "engines": { "dsh": ">=0.1.0-rc.6" },
