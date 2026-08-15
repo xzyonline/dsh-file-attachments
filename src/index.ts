@@ -25,7 +25,7 @@ export function apply(ctx: PluginContext, config: Config = {}): void {
   ctx.effect(() => registerAttachmentRoutes(ctx, store), 'file-attachments.http')
   ctx.effect(() => registerAttachmentTools(ctx, store), 'file-attachments.tools')
   ctx.effect(() => ctx.systemPrompt.section({ name: 'tool:dsh-file-attachments', order: 70, text: ATTACHMENT_PROMPT }), 'file-attachments.prompt')
-  ctx.effect(() => ctx.on('agent/pre-step', createInjectionHandler(store) as never), 'file-attachments.mark')
+  ctx.effect(() => ctx.on('agent/pre-step', createInjectionHandler(store, ctx.sessionQuery) as never), 'file-attachments.mark')
 }
 
 export default { name, inject, apply }

@@ -9,7 +9,6 @@ const ATT_ID_PATTERN = /att_[a-f0-9]{8,}/g
 
 export interface PreStepPayload {
   agent: { id: string }
-  step: number
   messages: readonly { content: readonly { type: string; text?: string }[] }[]
 }
 
@@ -35,22 +34,31 @@ export interface PreStepDecision {
  * authoritative batch — no race, no loss.
  *
  * Repeat prevention is a per-session in-memory watermark of announced ids.
- * After a process restart the watermark is rebuilt from the projected history
- * (announcement lines are durable `user/message` events, so their attachment
- * ids survive in `messages`): files already announced are never replayed, and
- * files uploaded but never announced — however old — are announced exactly
- * once. Announcement only happens on `step === 0` so tool-continuation steps
- * are never disturbed.
+ * After a process restart the watermark is rebuilt from the durable session
+ * log through `sessionQuery.readSession` (announcement lines are
+ * `user/message` events with a plugin source, so their attachment ids
+ * survive there): files already announced are never replayed, and files
+ * uploaded but never announced — however old — are announced exactly once.
+ * Announcement only happens when the batch's last message is a plain user
+ * message (`source.kind === 'user'`), so tool-continuation steps are never
+ * disturbed.
  */
-export function createInjectionHandler(store: AttachmentStore) {
+export function createInjectionHandler(store: AttachmentStore, sessionQuery: { readSession(sessionId: string): Promise<{ events: readonly unknown[] }> }) {
   const watermark = new Map<string, Set<string>>()
 
-  const announcedIn = (messages: readonly { content: readonly { type: string; text?: string }[] }[]): Set<string> => {
+  const collectIds = (text: string, ids: Set<string>): void => {
+    for (const match of text.matchAll(ATT_ID_PATTERN)) ids.add(match[0])
+  }
+
+  const rebuildFromLog = async (sessionId: string): Promise<Set<string>> => {
     const ids = new Set<string>()
-    for (const message of messages) {
-      for (const block of message.content) {
-        if (block.type !== 'text' || block.text === undefined) continue
-        for (const match of block.text.matchAll(ATT_ID_PATTERN)) ids.add(match[0])
+    const { events } = await sessionQuery.readSession(sessionId)
+    for (const event of events as readonly { type?: string; data?: { source?: { kind?: string; plugin?: string }; content?: readonly { type: string; text?: string }[] } }[]) {
+      if (event.type !== 'user/message') continue
+      const source = event.data?.source
+      if (source === undefined || source.kind !== 'plugin' || source.plugin !== 'dsh-file-attachments') continue
+      for (const block of event.data?.content ?? []) {
+        if (block.type === 'text' && block.text !== undefined) collectIds(block.text, ids)
       }
     }
     return ids
@@ -58,18 +66,21 @@ export function createInjectionHandler(store: AttachmentStore) {
 
   return async (payload: PreStepPayload, next: () => Promise<PreStepDecision>): Promise<PreStepDecision> => {
     const decision = await next()
-    if (decision.kind !== 'enter' || !Array.isArray(decision.messages) || payload.step !== 0) return decision
+    if (decision.kind !== 'enter' || !Array.isArray(decision.messages) || decision.messages.length === 0) return decision
+    const last = decision.messages[decision.messages.length - 1] as { source?: { kind?: string } } | undefined
+    if (last === undefined || last.source?.kind !== 'user') return decision
     const sessionId = payload.agent.id
     try {
       const attachments = await store.listLatestBySession(sessionId)
       if (attachments.length === 0) return decision
       let known = watermark.get(sessionId)
       if (known === undefined) {
-        // Restart recovery: ids already present in projected history were announced before.
-        known = announcedIn(decision.messages as never)
+        // Restart recovery: ids persisted in the durable log were announced before.
+        known = await rebuildFromLog(sessionId)
         watermark.set(sessionId, known)
       }
       const fresh = attachments.filter((attachment) => !known!.has(attachment.id))
+      console.log(`[dsh-file-attachments] pre-step ${sessionId}: attachments=${attachments.length} announced=${known!.size} fresh=${fresh.length}`)
       if (fresh.length === 0) return decision
       for (const attachment of fresh) known!.add(attachment.id)
       const names = fresh
@@ -92,8 +103,9 @@ export function createInjectionHandler(store: AttachmentStore) {
           },
         ],
       }
-    } catch {
-      // A pre-step listener must never break the loop: fall through unchanged.
+    } catch (error) {
+      // A pre-step listener must never break the loop — but stay observable.
+      console.error('[dsh-file-attachments] pre-step announcement failed:', error)
       return decision
     }
   }
