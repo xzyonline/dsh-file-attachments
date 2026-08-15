@@ -5,10 +5,11 @@ interface FakeAttachment {
   id: string
   safeName: string
   createdAt: number
+  detected: { family: string; kind: string }
 }
 
 function fakeAttachment(id: string, createdAt: number): FakeAttachment {
-  return { id, safeName: `${id}.txt`, createdAt }
+  return { id, safeName: `${id}.txt`, createdAt, detected: { family: 'text', kind: 'plain' } }
 }
 
 function harness(attachments: () => Promise<FakeAttachment[]>) {
@@ -29,6 +30,8 @@ describe('createInjectionHandler', () => {
     const message = injected[0]! as { content: { text: string }[]; source: { kind: string; plugin: string } }
     expect(message.content[0]!.text).toContain(MARK_PREFIX)
     expect(message.content[0]!.text).toContain('att-a')
+    expect(message.content[0]!.text).toContain('text/plain')
+    expect(message.content[0]!.text).toContain('attachment_info')
     expect(message.source.kind).toBe('plugin')
     expect(message.source.plugin).toBe('dsh-file-attachments')
   })

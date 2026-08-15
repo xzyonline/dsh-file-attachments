@@ -13,10 +13,12 @@ Session-bound file attachments for the DeepSeek Harness Web GUI. Add files by dr
 - **Delivery receipt** — a quiet line under the user's message bubble reports the file's state against real events: `Agent received` → `Agent reading…` → `Agent read`. The final stage appears only after the model actually calls the read tools for that file; nothing is faked.
 - **Readers** — text/config/source files, PDF, DOCX, XLSX (shared strings, A1 ranges), PPTX, legacy .doc/.xls, RTF, ODF, EPUB, and ZIP/7z/RAR/EPUB directory listing with safe single-entry extraction.
 - **Model tools** — `attachment_info`, `read_attachment`, `list_archive`, with offset/page/range/cursor pagination.
+- **Auto-announcement** — when a user message enters the inbox, files that were never announced are injected into the model's view through the official `agent.inject()` channel (plugin-source, rendered as an inject line — never a fake user bubble), carrying each file's detected type so the model picks `read_attachment` vs `list_archive` immediately. A per-session watermark prevents repeats; a 10-minute window prevents history replay after restarts.
 
 ## Safety
 
 - Session ownership is enforced on every read; HTTP endpoints validate Origin; session existence is verified (fail-closed).
+- Announcement is a best-effort emit listener: it never throws into the inbox flow, and cancellation or disposal may discard pending context (official `Agent.inject` semantics) — the strengthened system-prompt section remains as the fallback trigger.
 - Parsing runs in worker threads under a memory cap and a hard timeout that terminates hung parsers.
 - Archive paths are whitelisted and normalised; extraction writes to stdout only (no zip-slip surface); decompressed output is capped.
 - Output is redacted line-wise for credential keys and private-key blocks before it reaches the model.
@@ -54,7 +56,7 @@ The installer builds the artifacts, links the package into the shared profile di
 |---|---|---|---|
 | Symlink / junction | symlink | symlink, junction fallback | symlink |
 | Archive reader | system bsdtar | built-in `tar.exe` (Windows 10+) | system tar |
-| CI | ubuntu / macos / windows × Node 22 / 24, build + typecheck + 147 tests + installer smoke | | |
+| CI | ubuntu / macos / windows × Node 22 / 24, build + typecheck + 153 tests + installer smoke | | |
 
 ## Development
 
@@ -62,7 +64,7 @@ The installer builds the artifacts, links the package into the shared profile di
 npm install
 npm run build        # host + client bundles
 npm run typecheck
-npm test             # 147 tests
+npm test             # 153 tests
 node scripts/smoke.mjs http://127.0.0.1:3080   # live smoke test
 ```
 
