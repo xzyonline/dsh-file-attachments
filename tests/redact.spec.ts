@@ -18,6 +18,16 @@ describe('redactSensitiveText', () => {
     expect(redactSensitiveText(source)).toEqual({ text: source, redacted: 0 })
   })
 
+  it('redacts compound secret key names (aws_secret_access_key style) and camelCase apiKey', () => {
+    expect(redactSensitiveText('aws_secret_access_key: AKIA123EXAMPLE\n{"apiKey": "sk-abc"}').text)
+      .toBe('aws_secret_access_key: [REDACTED]\n{"apiKey": "[REDACTED]"}')
+  })
+
+  it('does not redact non-secret names like public_key or monkey', () => {
+    const source = 'public_key: ssh-rsa AAAA\nmonkey: banana\nkeyboard: layout'
+    expect(redactSensitiveText(source).text).toBe(source)
+  })
+
   it('preserves indentation and value quotes while redacting each matching line', () => {
     const source = '  token: \'abc\'\nCOOKIE=value\npublic=true'
 

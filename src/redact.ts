@@ -3,7 +3,8 @@ export interface RedactionResult {
   redacted: number
 }
 
-const SECRET_KEY = /^(password|passwd|pwd|secret|token|api_key|apikey|authorization|cookie|set-cookie|private_key|client_secret)$/i
+const SECRET_KEY = /(^|[_-])(password|passwd|pwd|secret|token|apikey|api[-_]?key|authorization|cookie|private[-_]?key|client[-_]?secret|credential|access[-_]?key)($|[_-])/i
+const SECRET_KEY_CAMEL = /^(password|passwd|pwd|secret|token|apiKey|authorization|cookie|privateKey|clientSecret|credential|accessKey)$/
 const PEM_BEGIN = /^([ \t]*-----BEGIN (?:[A-Z ]+ )?PRIVATE KEY-----)[ \t]*$/
 const PEM_END = /^[ \t]*-----END (?:[A-Z ]+ )?PRIVATE KEY-----[ \t]*$/
 
@@ -39,9 +40,13 @@ export function redactSensitiveText(text: string): RedactionResult {
   return { text: lines.join('\n'), redacted }
 }
 
+function isSensitiveKey(key: string): boolean {
+  return SECRET_KEY.test(key) || SECRET_KEY_CAMEL.test(key)
+}
+
 function isSensitiveYamlBlockStart(line: string): boolean {
   const match = line.match(/^(\s*)([A-Za-z][A-Za-z0-9_-]*)\s*:\s*[|>][-+]?\d*\s*(?:#.*)?$/)
-  return match !== null && SECRET_KEY.test(match[2]!)
+  return match !== null && isSensitiveKey(match[2]!)
 }
 
 function redactLine(line: string): string {
@@ -53,7 +58,7 @@ function redactLine(line: string): string {
   if (!match) return line
   const [, indentation, originalKey, keyWhitespace, separator, valueWhitespace, value] = match
   const key = originalKey!.replace(/^['"]|['"]$/g, '')
-  if (!SECRET_KEY.test(key)) return line
+  if (!isSensitiveKey(key)) return line
 
   const [secretValue, comment] = splitTrailingComment(value!, separator!)
   const quote = secretValue.match(/^\s*(["'])/)
@@ -82,7 +87,7 @@ function redactJsonValues(line: string): string {
     } catch {
       return line
     }
-    if (SECRET_KEY.test(key)) {
+    if (isSensitiveKey(key)) {
       output += line.slice(cursor, valueStart) + '"[REDACTED]"'
       cursor = valueEnd
       index = valueEnd - 1

@@ -1,62 +1,97 @@
 # dsh-file-attachments
 
-Session-bound file attachments for the DeepSeek Harness Web GUI. Add files by drag-and-drop, paste, or the attach button; storage is content-addressed and immutable; reads are bounded, session-authorized, and run in isolated worker threads.
+Session-bound file attachments for the DeepSeek Harness (DSH). Drag, paste, or pick any file into the Web composer — the model is **announced** about it on its very next step, reads it through bounded, session-authorized tools, and never sees your secrets: storage is content-addressed and immutable, parsing runs in isolated worker threads under memory and timeout caps, and output is redacted before it reaches the model.
 
 [![CI](https://github.com/xzyonline/dsh-file-attachments/actions/workflows/ci.yml/badge.svg)](https://github.com/xzyonline/dsh-file-attachments/actions/workflows/ci.yml)
 [![License: MIT](https://img.shields.io/badge/License-MIT-blue.svg)](./LICENSE)
 [![Release](https://img.shields.io/github/v/release/xzyonline/dsh-file-attachments)](https://github.com/xzyonline/dsh-file-attachments/releases)
 
+---
+
 ## Features
 
-- **Intake** — drop a file onto the composer, paste it from the clipboard, or use the attach button. Images continue on the native image path.
-- **Typed cards** — attachment cards show a distinct icon and colour per detected type (spreadsheet, PDF, archive, config, source code, …).
-- **Delivery receipt** — a quiet line under the user's message bubble reports the file's state against real events: `Agent received` → `Agent reading…` → `Agent read`. The final stage appears only after the model actually calls the read tools for that file; nothing is faked.
-- **Readers** — text/config/source files, PDF, DOCX, XLSX (shared strings, A1 ranges), PPTX, legacy .doc/.xls, RTF, ODF, EPUB, and ZIP/7z/RAR/EPUB directory listing with safe single-entry extraction.
-- **Model tools** — `attachment_info`, `read_attachment`, `list_archive`, with offset/page/range/cursor pagination.
-- **Auto-announcement** — when a user message enters the inbox, files that were never announced are injected into the model's view through the official `agent.inject()` channel (plugin-source, rendered as an inject line — never a fake user bubble), carrying each file's detected type so the model picks `read_attachment` vs `list_archive` immediately. A per-session watermark prevents repeats; a 10-minute window prevents history replay after restarts.
+| Capability | Details |
+|---|---|
+| **Intake** | Drop a file **anywhere in the window**, paste it, or use the attach button. Raster images continue on DSH's native image path; everything else enters this plugin. A lightweight "release to attach" overlay replaces the official "images only" blocker toast. |
+| **Auto-announcement** | The official wire carries no visible file marker, so a text-only model can silently ignore uploads. Right before the loop enters a step we append one `plugin`-source line announcing every unannounced file **with its detected type**, so the model knows to call `attachment_info` → `read_attachment` / `list_archive` and can combine the file content with the user's words. Injected through the official `agent/pre-step` waterfall (the only serial chain before request derivation — no race, no loss) and rendered by the official UI as an inject line, never a fake user bubble. |
+| **Typed cards** | Composer cards show a distinct icon and colour per detected family (text / document / spreadsheet / presentation / archive / …). |
+| **Delivery receipt** | A quiet line under the user's bubble reports real events: `Agent received → Agent reading… → Agent read`. The final stage appears only after the model actually calls the read tools; nothing is faked. |
+| **Readers** | Text/config/source files, PDF, DOCX, XLSX (sheet + A1-range reads), PPTX, legacy `.doc`/`.xls`, RTF, ODF, EPUB, and ZIP/7z/RAR/EPUB listing with safe single-entry extraction (CJK entry names fully supported). |
+| **Model tools** | `attachment_info`, `read_attachment`, `list_archive` — bounded page/range/cursor/paragraph pagination, archives listed before extraction. |
+| **Redaction** | Credential keys, private-key PEM blocks, and YAML block scalars are redacted line-wise before any byte reaches the model (`aws_secret_access_key`, `apiKey`, `set-cookie` included; `public_key`, `monkey` untouched). |
 
-## Safety
+## Architecture
 
-- Session ownership is enforced on every read; HTTP endpoints validate Origin; session existence is verified (fail-closed).
-- Announcement is a best-effort emit listener: it never throws into the inbox flow, and cancellation or disposal may discard pending context (official `Agent.inject` semantics) — the strengthened system-prompt section remains as the fallback trigger.
-- Parsing runs in worker threads under a memory cap and a hard timeout that terminates hung parsers.
-- Archive paths are whitelisted and normalised; extraction writes to stdout only (no zip-slip surface); decompressed output is capped.
-- Output is redacted line-wise for credential keys and private-key blocks before it reaches the model.
-- Limits: 25 MB per file (100 MB archives), 10 files / 50 MB per message, 256 KB / 2 000 lines per read.
+```
+composer drop / paste / button (client)
+   │  full-window takeover, generic files only — images stay native
+   ▼
+POST /api/dsh-file-attachments/v1/files   (Origin + session-existence verified, fail-closed)
+   ▼
+content-addressed store  (sha256 blob, atomic hard-link publish, immutable)
+   ├─ detection (magic bytes + ZIP metadata, worker-isolated)
+   ├─ refs + batch indexes (durable metadata, path-injection-validated)
+   └─ read path: session ownership check → bounded worker parse → redaction
+   ▼
+model view:
+   ├─ agent/pre-step announcement line (plugin source, type-tagged)
+   └─ attachment_info / read_attachment / list_archive tools
+```
 
 ## Install
 
-### Download the prebuilt bundle (recommended)
-
-1. Get `dsh-file-attachments-0.1.0.zip` from [Releases](https://github.com/xzyonline/dsh-file-attachments/releases) and verify it against `SHA256SUMS.txt`.
-2. Extract anywhere.
-3. Double-click the installer for your OS:
-   - Windows: `install.bat`
-   - macOS / Linux: `install.command`
-4. Restart the dsh web process, hard-refresh the browser, and confirm the attach button appears in the composer.
-
-No git, build step, or package manager is required for the prebuilt bundle. Uninstall with `uninstall.bat` / `uninstall.command`.
-
-### From source
-
-Requires Node.js ≥ 20.
+### One-command install
 
 ```sh
-git clone https://github.com/xzyonline/dsh-file-attachments.git
-cd dsh-file-attachments
-npm install
+# macOS / Linux (from the repository root)
 node scripts/install.mjs
+# or double-click: install.command        (Windows: install.bat)
 ```
 
-The installer builds the artifacts, links the package into the shared profile directory (`$DSH_HOME/profiles/node_modules`, so every profile resolves it), and appends one row to `$DSH_HOME/cordis.patch.yml` (backed up first). It is idempotent; running it again is safe. See [docs/DEPLOY.md](./docs/DEPLOY.md) for per-platform details and troubleshooting.
+The installer builds host + client bundles, symlinks the package into the **shared** profile directory (`$DSH_HOME/profiles/node_modules`, so *every* profile — web, CLI, headless — resolves it), and appends one row to `$DSH_HOME/cordis.patch.yml` (a backup is written first). It is idempotent: running it again is safe. Uninstall: `node scripts/install.mjs --uninstall` or `uninstall.bat` / `uninstall.command`.
+
+Prebuilt bundle: download `dsh-file-attachments-<version>.zip` from [Releases](https://github.com/xzyonline/dsh-file-attachments/releases), verify it against `SHA256SUMS.txt`, extract, and double-click the installer. No git, build step, or package manager required.
+
+### Per-end deployment
+
+| End | Steps | What you get |
+|---|---|---|
+| **Web (`dsh web`)** | run the installer → restart `dsh web` → hard-refresh (Cmd+Shift+R / Ctrl+Shift+R) | attach button, full-window drop, typed cards, delivery receipt, auto-announcement |
+| **CLI / headless** | nothing further — the host half mounts through the shared profile | `attachment_info` / `read_attachment` / `list_archive` tools; attachments uploaded through the API (or by a Web session) are readable, and announcements fire on the same official events |
+
+Configuration: the storage root defaults to `$DSH_HOME/file-attachments`; override with `config.root` on the plugin row in `cordis.patch.yml`.
+
+## Safety model
+
+- **Session ownership** — every read verifies `ownerSessionId` and that the session still exists (`sessionQuery.readSession`, fail-closed, 10 s TTL cache).
+- **Origin** — uploads require a trusted `Origin` (exact match or loopback-equivalent `127.0.0.1`/`localhost`/`[::1]` on the same port); cross-site reads and deletes are rejected while origin-less local clients stay allowed.
+- **Parsing isolation** — every parse runs in a worker thread under `maxOldGenerationSizeMb: 512` and a hard timeout that terminates hung parsers (`word-extractor`/`xlsx` cannot be aborted otherwise).
+- **Archive safety** — paths are normalized and whitelisted; extraction writes to stdout only (no zip-slip surface); hostile entries are skipped during listing and rejected during extraction; decompressed output is capped at 256 MB.
+- **Redaction** — line-wise credential/private-key redaction before the model (see Features).
+- **Limits** — 25 MB per file (100 MB archives), 10 files / 50 MB per message, 256 KB / 2 000 lines per read, 15 s parser timeout, 10 s archive timeout.
+- **Announcement degradation** — the pre-step listener never throws into the loop; any failure falls through unchanged, and a strengthened `systemPrompt` section (`order: 70`) remains as the fallback trigger.
+
+## Official API conformance
+
+Every seam this plugin uses is a public DeepSeek Harness contract — no monkey-patching, no core changes, harness upgrades unaffected:
+
+| Used | Purpose | Official reference |
+|---|---|---|
+| `agent/pre-step` waterfall | append the announcement to the authoritative `enter` batch | [`docs/subsystems/core.md`](https://github.com/deepseek-ai/deepseek-harness/blob/master/docs/subsystems/core.md) ("the only serial listener chain before request derivation") |
+| `MessageSourceMap.plugin` | announcement source (`kind: 'plugin'`), rendered by the official UI as an inject line | `@deepseek-ai/dsh-llm` type declarations |
+| `systemPrompt.section` | fallback trigger instructions | `@deepseek-ai/dsh-system-prompt` |
+| `tools.register` / `defineTool` | the three model tools | `@deepseek-ai/dsh-tools` |
+| `webServer.register` | HTTP upload/metadata/delete routes | `@deepseek-ai/dsh-host-webserver` |
+| `sessionQuery.readSession` | session existence verification | `@deepseek-ai/dsh-session-query` |
+| Content-addressed attachment design | storage philosophy (immutable sha256 objects) | `@deepseek-ai/dsh-attachment` |
 
 ## Compatibility
 
 | | macOS | Windows | Linux |
 |---|---|---|---|
 | Symlink / junction | symlink | symlink, junction fallback | symlink |
-| Archive reader | system bsdtar | built-in `tar.exe` (Windows 10+) | system tar |
-| CI | ubuntu / macos / windows × Node 22 / 24, build + typecheck + 153 tests + installer smoke | | |
+| Archive reader | system `bsdtar` | built-in `tar.exe` (Windows 10+) | system `tar` |
+| CI | ubuntu / macos / windows × Node 22 / 24 — build + typecheck + **168 tests** + installer smoke | | |
 
 ## Development
 
@@ -64,12 +99,13 @@ The installer builds the artifacts, links the package into the shared profile di
 npm install
 npm run build        # host + client bundles
 npm run typecheck
-npm test             # 153 tests
-node scripts/smoke.mjs http://127.0.0.1:3080   # live smoke test
+npm test             # 168 tests (vitest)
+node scripts/smoke.mjs http://127.0.0.1:3080 <file>   # live smoke against a running web
 ```
 
 ## Attribution and license
 
-- MIT. See [LICENSE](./LICENSE).
-- Dependency attributions: [THIRD_PARTY_NOTICES.md](./THIRD_PARTY_NOTICES.md).
-- The user-message renderer ported for the receipt is derived from DeepSeek Harness's own `dsh-client-ui-conversation` package (MIT); the installer's junction-fallback strategy follows `@linxin666/dsh-client-ui-skin-center` (Apache-2.0). Both are credited in the respective source files and notices.
+- **MIT** — see [LICENSE](./LICENSE).
+- **Dependency attributions** — [THIRD_PARTY_NOTICES.md](./THIRD_PARTY_NOTICES.md) (`@keep-lts/xlsx`, `cfb`, `fflate`, `file-type`, `pdfjs-dist`, `word-extractor`, `react`, `schemastery`, build/test tooling).
+- **Derived code** — the user-message renderer used by the delivery receipt is ported from DeepSeek Harness's own `dsh-client-ui-conversation` (MIT); the installer's junction-fallback strategy follows `@linxin666/dsh-client-ui-skin-center` (Apache-2.0). Both are credited in the respective source files and notices.
+- **Design reference** — the content-addressed storage model follows the official `@deepseek-ai/dsh-attachment` package (see conformance table above).

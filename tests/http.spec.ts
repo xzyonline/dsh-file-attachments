@@ -94,4 +94,35 @@ describe('attachment HTTP routes', () => {
     const local = await callRoute(dispatch, 'DELETE', `/api/dsh-file-attachments/v1/files/${id}`, { 'x-dsh-session-id': 'session-a' })
     expect(local.statusCode).toBe(200)
   })
+
+  it('accepts the loopback-equivalent origin localhost on the same port', async () => {
+    const { store } = await setup()
+    const dispatch = (req: never, res: never) => dispatchAttachmentHttp(req, res, store, { expectedOrigin: 'http://127.0.0.1:3080' })
+    const response = await callRoute(dispatch, 'POST', '/api/dsh-file-attachments/v1/files', {
+      origin: 'http://localhost:3080', 'x-dsh-session-id': 'session-a', 'x-dsh-batch-id': 'batch-a', 'x-dsh-file-name': 'a.config',
+    })
+    expect(response.statusCode).toBe(201)
+  })
+
+  it('still rejects a loopback origin on a different port', async () => {
+    const { store } = await setup()
+    const dispatch = (req: never, res: never) => dispatchAttachmentHttp(req, res, store, { expectedOrigin: 'http://127.0.0.1:3080' })
+    const response = await callRoute(dispatch, 'POST', '/api/dsh-file-attachments/v1/files', {
+      origin: 'http://localhost:9999', 'x-dsh-session-id': 'session-a', 'x-dsh-batch-id': 'batch-a', 'x-dsh-file-name': 'a.config',
+    })
+    expect(response.statusCode).toBe(403)
+  })
+
+  it('rejects uploads for a session that does not exist (fail-closed)', async () => {
+    const { store } = await setup()
+    const dispatch = (req: never, res: never) => dispatchAttachmentHttp(req, res, store, {
+      expectedOrigin: 'http://127.0.0.1:0',
+      verifySession: async () => false,
+    })
+    const response = await callRoute(dispatch, 'POST', '/api/dsh-file-attachments/v1/files', {
+      origin: 'http://127.0.0.1:0', 'x-dsh-session-id': 'ghost-session', 'x-dsh-batch-id': 'batch-a', 'x-dsh-file-name': 'a.config',
+    })
+    expect(response.statusCode).toBe(403)
+    expect(response.body.error.code).toBe('ATTACHMENT_FORBIDDEN')
+  })
 })

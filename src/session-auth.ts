@@ -13,7 +13,7 @@ const SESSION_CHECK_TTL_MS = 10_000
 const sessionCheckCache = new Map<string, { ok: boolean; at: number }>()
 
 /** 验证会话真实存在(失败关闭)。短 TTL 缓存,避免大会话每次读取都整本重放。 */
-async function sessionExists(query: SessionQueryLike, sessionId: string): Promise<boolean> {
+export async function sessionExists(query: SessionQueryLike, sessionId: string): Promise<boolean> {
   const cached = sessionCheckCache.get(sessionId)
   const now = Date.now()
   if (cached && now - cached.at < SESSION_CHECK_TTL_MS) return cached.ok
