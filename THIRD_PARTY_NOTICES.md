@@ -1,6 +1,6 @@
 # 第三方组件归因声明（THIRD-PARTY NOTICES）
 
-本文件覆盖两个拟开源项目：`dsh-vision`（识图）与 `dsh-file-attachments`（文件识别/读取）。
+本文件覆盖两个开源项目：`dsh-vision`（识图）与 `dsh-file-attachments`（文件识别/读取）。
 所有依赖均为 OSI 批准的许可证（MIT / Apache-2.0 / BSD-3-Clause），与本项目许可证兼容。
 
 ## dsh-file-attachments（文件识别/读取）
@@ -13,11 +13,12 @@
 | word-extractor | MIT | 读取 Word 97-2003（.doc/.wps） | [morungos/word-extractor](https://github.com/morungos/word-extractor) |
 | fflate | MIT | zip 解压（OOXML/ODF/EPUB） | [101arrowz/fflate](https://github.com/101arrowz/fflate) |
 | file-type | MIT | 文件魔数检测 | [sindresorhus/file-type](https://github.com/sindresorhus/file-type) |
-| fast-xml-parser | MIT | XML 解析 | [NaturalIntelligence/fast-xml-parser](https://github.com/NaturalIntelligence/fast-xml-parser) |
 | schemastery | MIT | 工具参数 schema | @deepseek-ai/schemastery（源自 [koishi/schemastery](https://github.com/koishijs/schemastery)） |
 | react | MIT | 客户端 UI（peer） | Meta [facebook/react](https://github.com/facebook/react) |
 
 框架 peer 依赖（运行宿主提供）：@deepseek-ai/cordis、dsh-* 系列（DeepSeek Harness，MIT）。
+
+注：`fast-xml-parser` 曾为依赖，因零引用（死依赖）已于 2026-08-15 移除。
 
 ## dsh-vision（识图）
 
