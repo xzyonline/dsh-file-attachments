@@ -16,10 +16,12 @@
 import { access, cp, lstat, mkdir, readFile, readlink, rm, symlink, writeFile } from 'node:fs/promises'
 import { existsSync } from 'node:fs'
 import { execFileSync } from 'node:child_process'
+import { createRequire } from 'node:module'
 import { dirname, join, resolve } from 'node:path'
 import { homedir } from 'node:os'
 import { fileURLToPath } from 'node:url'
 
+const require = createRequire(import.meta.url)
 const pluginRoot = resolve(dirname(fileURLToPath(import.meta.url)), '..')
 const PACKAGE_NAME = '@dsh-external/dsh-file-attachments'
 const PATCH_ROW_ID = 'dsh-file-attachments'
@@ -40,10 +42,14 @@ function fail(message) { console.error(`[dsh-file-attachments] 错误: ${message
 async function ensureBuilt() {
   if (existsSync(join(pluginRoot, 'lib', 'index.js')) && existsSync(join(pluginRoot, 'lib', 'client.js'))) return true
   log('构建产物缺失,尝试自动构建…')
-  const tsdown = join(pluginRoot, 'node_modules', '.bin', process.platform === 'win32' ? 'tsdown.cmd' : 'tsdown')
-  if (!existsSync(tsdown)) return fail('未找到 node_modules。请先在插件目录执行 npm install(或 pnpm install),再运行本脚本。')
+  let tsdownEntry
   try {
-    execFileSync(tsdown, [], { cwd: pluginRoot, stdio: 'inherit' })
+    tsdownEntry = join(dirname(require.resolve('tsdown/package.json')), 'dist', 'run.mjs')
+  } catch {
+    return fail('未找到 node_modules。请先在插件目录执行 npm install(或 pnpm install),再运行本脚本。')
+  }
+  try {
+    execFileSync(process.execPath, [tsdownEntry], { cwd: pluginRoot, stdio: 'inherit' })
     execFileSync(process.execPath, [join(pluginRoot, 'scripts', 'build-client.mjs')], { cwd: pluginRoot, stdio: 'inherit' })
   } catch (error) {
     return fail(`构建失败: ${error instanceof Error ? error.message : String(error)}`)

@@ -71,8 +71,11 @@ describe('AttachmentStore', () => {
 
     expect(await store.listBatch('session-a', 'same-batch')).toHaveLength(1)
     expect(await store.listBatch('session-b', 'same-batch')).toHaveLength(1)
-    expect((await stat(join(store.root, 'refs', `${first.id}.json`))).mode & 0o777).toBe(0o600)
-    expect((await stat(join(store.root, 'refs', `${second.id}.json`))).mode & 0o777).toBe(0o600)
+    if (process.platform !== 'win32') {
+      // Windows 不支持 POSIX 权限位,chmod 为 no-op
+      expect((await stat(join(store.root, 'refs', `${first.id}.json`))).mode & 0o777).toBe(0o600)
+      expect((await stat(join(store.root, 'refs', `${second.id}.json`))).mode & 0o777).toBe(0o600)
+    }
   })
 
   it('removes a draft reference but keeps the immutable blob available to a duplicate reference', async () => {
