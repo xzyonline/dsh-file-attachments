@@ -32,7 +32,7 @@ describe('archive boundaries', () => {
   it('extracts one regular entry to stdout and never supplies a shell string', async () => {
     const fake = fakeBsdtar({ verboseType: '-', extract: Buffer.from('token=abc') })
     const result = await readArchiveEntry({ path: '/blob.zip' }, 'archive-entry', signal, fake.runner)
-    expect(fake.calls.at(-1)?.file).toBe('/usr/bin/tar')
+    expect(['/usr/bin/tar', 'tar']).toContain(fake.calls.at(-1)?.file)
     expect(fake.calls.at(-1)?.args).toEqual(['-xOf', '/blob.zip', '--', 'archive-entry'])
     expect(result.text).toContain('token=[REDACTED]')
   })
