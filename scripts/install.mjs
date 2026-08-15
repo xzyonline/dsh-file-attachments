@@ -6,14 +6,14 @@
  * ensureSymlink 实现;补丁幂等写入/备份为插件社区通行做法。其余为本项目原创。
  *
  * 用法:
- *   node scripts/install.mjs                 # 默认 profile=web
- *   node scripts/install.mjs --profile web   # 指定 profile
+ *   node scripts/install.mjs                 # 部署到共享目录,对所有 profile 生效
  *   node scripts/install.mjs --uninstall     # 卸载(等价于 scripts/uninstall.mjs)
  *
  * 行为(全程幂等,可重复执行):
  *   1. 构建产物缺失时自动构建(lib/index.js + lib/client.js);
- *   2. 把插件包链接进 <DSH_HOME>/profiles/<profile>/node_modules/@dsh-external/dsh-file-attachments
- *      (macOS/Linux 符号链接;Windows 优先符号链接,无权限时回退目录联接 junction);
+ *   2. 把插件包链接进 <DSH_HOME>/profiles/node_modules/@dsh-external/dsh-file-attachments
+ *      (官方共享扁平目录——home 补丁行对所有 profile 生效,故链接也必须所有 profile 可解析;
+ *      macOS/Linux 符号链接;Windows 优先符号链接,无权限时回退目录联接 junction);
  *   3. 把插件行写入 <DSH_HOME>/cordis.patch.yml(已存在则跳过,写入前备份 .bak);
  *   4. 打印验证与生效步骤。
  */
@@ -32,12 +32,13 @@ const PATCH_ROW_ID = 'dsh-file-attachments'
 
 const args = process.argv.slice(2)
 const uninstall = args.includes('--uninstall')
-const profileFlag = args.indexOf('--profile')
-const profile = profileFlag >= 0 && args[profileFlag + 1] ? args[profileFlag + 1] : 'web'
 const harnessHome = process.env.DSH_HOME && process.env.DSH_HOME.trim() !== '' ? process.env.DSH_HOME : join(homedir(), '.dsh')
 
 const patchPath = join(harnessHome, 'cordis.patch.yml')
-const packageLink = join(harnessHome, 'profiles', profile, 'node_modules', ...PACKAGE_NAME.split('/'))
+// 共享扁平目录(官方约定):home 补丁行会加载到【所有 profile】,因此包必须对任何 profile 可解析。
+// 链接到 <DSH_HOME>/profiles/node_modules/ 后,每个 profile 都能经父目录回溯解析到本插件,
+// 而不是只服务安装时选中的那一个 profile。
+const packageLink = join(harnessHome, 'profiles', 'node_modules', ...PACKAGE_NAME.split('/'))
 
 function log(message) { console.log(`[dsh-file-attachments] ${message}`) }
 function fail(message) { console.error(`[dsh-file-attachments] 错误: ${message}`); process.exitCode = 1; return false }

@@ -26,7 +26,7 @@ describe('install (cross-platform)', () => {
     expect((await stat(`${patchPath}.bak`)).isFile()).toBe(true)
 
     // Windows 目录联接在 Node 中同样报告为符号链接;无权限时安装器自动回退联接
-    const packageLink = join(home, 'profiles', 'web', 'node_modules', '@dsh-external', 'dsh-file-attachments')
+    const packageLink = join(home, 'profiles', 'node_modules', '@dsh-external', 'dsh-file-attachments')
     const link = await lstat(packageLink)
     expect(link.isSymbolicLink()).toBe(true)
 
@@ -53,6 +53,6 @@ describe('install (cross-platform)', () => {
     expect((removed.match(/id: dsh-file-attachments/g) ?? [])).toHaveLength(0)
     expect(removed).toContain('id: existing')
     expect(removed).toContain('fake-secret')
-    await rm(join(home, 'profiles', 'web', 'node_modules', '@dsh-external'), { recursive: true, force: true })
+    await rm(join(home, 'profiles', 'node_modules', '@dsh-external'), { recursive: true, force: true })
   })
 })
