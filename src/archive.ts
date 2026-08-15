@@ -39,6 +39,31 @@ export function normalizeArchivePath(value: string): string {
   return normalized
 }
 
+/**
+ * Decode bsdtar's octal escaping of non-ASCII bytes (`\351\223\276...` →
+ * UTF-8). bsdtar escapes high bytes when listing to a pipe, and the raw
+ * backslashes would otherwise be mistaken for Windows path separators by
+ * {@link normalizeArchivePath}, turning `\351\223...` into an "absolute
+ * path" and rejecting every archive that contains CJK file names.
+ */
+export function decodeTarEscapes(value: string): string {
+  if (!value.includes('\\')) return value
+  const bytes: number[] = []
+  const encoder = new TextEncoder()
+  let index = 0
+  while (index < value.length) {
+    const match = /^\\([0-7]{3})/.exec(value.slice(index))
+    if (match !== null) {
+      bytes.push(parseInt(match[1]!, 8))
+      index += 4
+    } else {
+      bytes.push(...encoder.encode(value[index]!))
+      index += 1
+    }
+  }
+  return new TextDecoder('utf-8', { fatal: false }).decode(new Uint8Array(bytes))
+}
+
 export async function listArchive(path: string, request: { cursor?: number; limit?: number; prefix?: string } = {}, signal: AbortSignal, runner: ArchiveRunner = runArchiveCommand): Promise<ArchivePage> {
   const result = await runner(resolveTarBinary(), ['-tf', path], { signal, timeoutMs: LIMITS.archiveTimeoutMs, maxStdout: LIMITS.readBytes, maxStderr: LIMITS.readBytes })
   if (result.code !== 0) throw new AttachmentError('CORRUPT_FILE', result.stderr.toString() || '无法读取归档目录')
@@ -46,7 +71,14 @@ export async function listArchive(path: string, request: { cursor?: number; limi
   const entries: ArchiveEntry[] = []
   for (const line of result.stdout.toString('utf8').split(/\r?\n/).filter(Boolean)) {
     if (entries.length >= LIMITS.archiveEntries) break
-    const normalized = normalizeArchivePath(line)
+    let normalized: string
+    try {
+      normalized = normalizeArchivePath(decodeTarEscapes(line))
+    } catch {
+      // One hostile entry must not hide the whole listing: skip it, stay observable.
+      console.warn('[dsh-file-attachments] skipping unsafe archive entry:', line)
+      continue
+    }
     if (seen.has(normalized) || (request.prefix && !normalized.startsWith(normalizeArchivePath(request.prefix)))) continue
     seen.add(normalized)
     entries.push({ path: normalized })
@@ -60,7 +92,7 @@ export async function listArchive(path: string, request: { cursor?: number; limi
 export async function readArchiveEntry(handle: ArchiveHandle, entryPath: string, signal: AbortSignal, runner: ArchiveRunner = runArchiveCommand): Promise<{ kind: 'archive-entry'; text: string; range: Record<string, string | number>; hasMore: boolean; redacted: number; truncated: boolean }> {
   const normalized = normalizeArchivePath(entryPath)
   const listing = await runner(resolveTarBinary(), ['-tvf', handle.path], { signal, timeoutMs: LIMITS.archiveTimeoutMs, maxStdout: LIMITS.readBytes, maxStderr: LIMITS.readBytes })
-  if (listing.code !== 0 || !isRegularEntry(listing.stdout.toString('utf8'), normalized)) throw new AttachmentError('ARCHIVE_PATH_REJECTED', '归档条目不是普通文件或不存在')
+  if (listing.code !== 0 || !isRegularEntry(decodeTarEscapes(listing.stdout.toString('utf8')), normalized)) throw new AttachmentError('ARCHIVE_PATH_REJECTED', '归档条目不是普通文件或不存在')
   const extracted = await runner(resolveTarBinary(), ['-xOf', handle.path, '--', normalized], { signal, timeoutMs: LIMITS.archiveTimeoutMs, maxStdout: LIMITS.fileBytes, maxStderr: LIMITS.readBytes })
   if (extracted.code !== 0) throw new AttachmentError('CORRUPT_FILE', extracted.stderr.toString('utf8') || '无法提取归档条目')
   const detected = await detectFile({ name: normalized, declaredMime: handle.declaredMime ?? '', bytes: extracted.stdout })
