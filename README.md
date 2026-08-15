@@ -47,7 +47,9 @@
 
 ## 一键部署
 
-前置:Node.js ≥ 20,已安装并运行 DeepSeek Harness Web。
+**零命令「双击即装」**:Windows 双击 `install.bat`;macOS 双击 `install.command`(自动装依赖 → 构建 → 链接 → 写补丁;卸载对应 `uninstall.bat` / `uninstall.command`)。
+
+命令行方式(前置:Node.js ≥ 20,已安装并运行 DeepSeek Harness Web):
 
 ```sh
 git clone https://github.com/xzyonline/dsh-file-attachments.git

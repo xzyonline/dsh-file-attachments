@@ -2,6 +2,20 @@
 
 本文是 `scripts/install.mjs` 一键部署的逐步拆解:每一步做什么、遇到问题怎么办、如何验证与卸载。
 
+## ⭐ 双击即装(零命令)
+
+下载源码并解压后,只需**双击一个文件**,依赖安装、构建、链接、写补丁全自动完成:
+
+| 平台 | 双击文件 | 说明 |
+|---|---|---|
+| Windows | **`install.bat`** | 自动检测 Node(没有则打开 nodejs.org 下载页)、自动 `npm install`、自动部署;出错不闪退,窗口停在错误信息处;卸载双击 `uninstall.bat` |
+| macOS | **`install.command`** | Finder 双击后在「终端」里运行(首次若被系统拦,右键 → 打开);同样全自动;卸载双击 `uninstall.command` |
+| Linux | `./install.command` | 与 macOS 同脚本,终端里执行或双击由文件管理器打开 |
+
+双击完成后:重启 dsh web → 浏览器硬刷新(macOS `Cmd+Shift+R` / Windows `Ctrl+Shift+R`)→ 输入框出现「添加文件」即成功。
+
+---
+
 ## 0. 前置条件
 
 | 项 | 要求 |
