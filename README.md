@@ -63,6 +63,8 @@ node scripts/install.mjs          # 自动构建 → 链接 → 写补丁(幂等
 
 安装完成后:重启 dsh web(守护会自动拉起;macOS 可双击 `~/Applications/DSH.app`),浏览器**硬刷新**(macOS `Cmd+Shift+R` / Windows `Ctrl+Shift+R`),输入框出现「添加文件」即成功。
 
+> 📖 **分平台逐步详解(含 PowerShell 联接回退、常见问题、升级与卸载)见 [docs/DEPLOY.md](./docs/DEPLOY.md)**。
+
 卸载:
 
 ```sh
