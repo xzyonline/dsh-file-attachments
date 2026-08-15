@@ -6,7 +6,7 @@ import { AttachmentStore } from './store.ts'
 
 export const name = 'dsh-file-attachments'
 export const inject = ['tools', 'systemPrompt', 'webServer', 'sessionQuery'] as const
-export const ATTACHMENT_PROMPT = 'Recognize <dsh-file ref="..."/> markers. Call attachment_info before choosing a reader, use bounded page/range/cursor calls, list archives before extracting a named path, never execute attachments, and use view_image for images.'
+export const ATTACHMENT_PROMPT = 'When the user asks about an uploaded file, or the message is an attachment-only request, call attachment_info() to list current-session attachments; if a visible file name is available, you may pass it as file_name. No visible marker is required. Use the returned attachment id for bounded page/range/cursor calls, list archives before extracting a named path, never execute attachments, and use view_image for images.'
 
 export interface PluginContext {
   effect(factory: () => () => void, label: string): void

@@ -1,6 +1,7 @@
 export const LIMITS = {
   fileBytes: 25 * 1024 * 1024,
   archiveBytes: 100 * 1024 * 1024,
+  decompressedBytes: 256 * 1024 * 1024,
   messageFiles: 10,
   messageBytes: 50 * 1024 * 1024,
   readBytes: 256 * 1024,
@@ -38,4 +39,6 @@ export interface AttachmentMetadata {
   bytes: number
   sha256: string
   createdAt: number
+  /** 服务端 blob 的真实落盘路径(悬停提示用);旧 ref 可能缺失。 */
+  storagePath?: string
 }

@@ -1,5 +1,5 @@
 import { AttachmentError } from './errors.ts'
-import { LIMITS } from './shared/contracts.ts'
+import { LIMITS, type AttachmentErrorCode } from './shared/contracts.ts'
 import type { ParserRequest, ParserResponse } from './worker-protocol.ts'
 
 export interface WorkerLike {
@@ -41,6 +41,8 @@ export async function runParserWorker(
       try { size = Buffer.byteLength(JSON.stringify(message)) } catch { size = LIMITS.readBytes + 1 }
       if (size > LIMITS.readBytes) {
         void settle('reject', new AttachmentError('PARSER_OUTPUT_LIMIT', '解析输出超过读取上限'))
+      } else if (isWorkerFailure(message)) {
+        void settle('reject', new AttachmentError(message.code, message.message))
       } else {
         void settle('resolve', message as ParserResponse)
       }
@@ -51,4 +53,16 @@ export async function runParserWorker(
     })
     worker.postMessage?.(request)
   })
+}
+
+interface WorkerFailure {
+  ok: false
+  code: AttachmentErrorCode
+  message: string
+}
+
+function isWorkerFailure(message: unknown): message is WorkerFailure {
+  if (message === null || typeof message !== 'object') return false
+  const candidate = message as { ok?: unknown; code?: unknown; message?: unknown }
+  return candidate.ok === false && typeof candidate.code === 'string' && typeof candidate.message === 'string'
 }

@@ -1,9 +1,9 @@
 import { createHash, randomUUID } from 'node:crypto'
-import { open, mkdir, readFile, rename, rm, stat } from 'node:fs/promises'
+import { open, mkdir, readFile, readdir, rename, rm, stat } from 'node:fs/promises'
 import { basename, join } from 'node:path'
-import { detectFileFromPath } from './detect.ts'
+import { runParsedInWorker } from './parse-host.ts'
 import { AttachmentError } from './errors.ts'
-import { LIMITS, type AttachmentId, type AttachmentMetadata } from './shared/contracts.ts'
+import { LIMITS, type AttachmentId, type AttachmentMetadata, type DetectedFileType } from './shared/contracts.ts'
 
 const ID_PATTERN = /^att_[A-Za-z0-9_-]{6,80}$/
 
@@ -47,7 +47,7 @@ export class AttachmentStore {
       await handle.sync()
       await handle.close()
 
-      const detected = await detectFileFromPath({ name: input.name, declaredMime: input.declaredMime, path: tempPath, signal: input.signal })
+      const detected = await runParsedInWorker({ op: 'detect', path: tempPath, name: input.name, declaredMime: input.declaredMime }, input.signal) as DetectedFileType
       if (detected.family !== 'archive' && bytes > LIMITS.fileBytes) throw new AttachmentError('FILE_TOO_LARGE', '普通文件超过 25 MB')
       const sha256 = hash.digest('hex')
       const blobPath = this.blobPath(sha256)
@@ -69,6 +69,7 @@ export class AttachmentStore {
         bytes,
         sha256,
         createdAt: this.now(),
+        storagePath: blobPath,
       }
       await writeJsonAtomic(join(this.root, 'refs', `${metadata.id}.json`), metadata)
       await this.writeBatch(input.sessionId, input.batchId, [...existing.map(item => item.id), metadata.id])
@@ -93,6 +94,10 @@ export class AttachmentStore {
       if (metadata.id !== id || !ID_PATTERN.test(metadata.id) || typeof metadata.ownerSessionId !== 'string' || typeof metadata.batchId !== 'string') return undefined
       if (!/^[a-f0-9]{64}$/.test(metadata.sha256) || !Number.isSafeInteger(metadata.bytes) || metadata.bytes < 0) return undefined
       if (this.blobPath(metadata.sha256) !== join(this.root, 'blobs', 'sha256', metadata.sha256.slice(0, 2), metadata.sha256)) return undefined
+      // 旧 ref(修复前写入)没有 storagePath:按 sha256 动态补算真实落盘路径,免磁盘迁移
+      if (typeof metadata.storagePath !== 'string' || metadata.storagePath === '') {
+        metadata.storagePath = this.blobPath(metadata.sha256)
+      }
       return metadata
     } catch {
       return undefined
@@ -134,6 +139,39 @@ export class AttachmentStore {
       if (metadata?.ownerSessionId === sessionId && metadata.batchId === batchId) result.push(metadata)
     }
     return result
+  }
+
+  async findLatestByName(sessionId: string, safeName: string): Promise<AttachmentMetadata | undefined> {
+    let entries: string[]
+    try {
+      entries = await readdir(join(this.root, 'refs'))
+    } catch {
+      return undefined
+    }
+    let latest: AttachmentMetadata | undefined
+    for (const entry of entries) {
+      if (!entry.startsWith('att_') || !entry.endsWith('.json')) continue
+      const metadata = await this.get(entry.slice(0, -5) as AttachmentId)
+      if (metadata?.ownerSessionId !== sessionId || metadata.safeName !== safeName) continue
+      if (!latest || metadata.createdAt > latest.createdAt) latest = metadata
+    }
+    return latest
+  }
+
+  async listLatestBySession(sessionId: string): Promise<AttachmentMetadata[]> {
+    let entries: string[]
+    try {
+      entries = await readdir(join(this.root, 'refs'))
+    } catch {
+      return []
+    }
+    const attachments: AttachmentMetadata[] = []
+    for (const entry of entries) {
+      if (!entry.startsWith('att_') || !entry.endsWith('.json')) continue
+      const metadata = await this.get(entry.slice(0, -5) as AttachmentId)
+      if (metadata?.ownerSessionId === sessionId) attachments.push(metadata)
+    }
+    return attachments.sort((left, right) => right.createdAt - left.createdAt || right.id.localeCompare(left.id))
   }
 
   private blobPath(sha256: string): string {

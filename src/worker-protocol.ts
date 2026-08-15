@@ -1,6 +1,13 @@
 export interface ParserRequest {
-  kind: string
+  /** 解析操作:读附件 / 列归档 / 检测文件类型。旧协议用 kind,保留兼容。 */
+  op?: 'read' | 'list' | 'detect'
+  kind?: string
   path: string
+  name?: string
+  declaredMime?: string
+  detectedFamily?: string
+  detectedKind?: string
+  request?: Record<string, unknown>
   [key: string]: unknown
 }
 
@@ -20,7 +27,7 @@ export interface ReadAttachmentRequest {
 }
 
 export interface ReadAttachmentResult {
-  kind: 'text' | 'pdf' | 'docx' | 'xlsx' | 'pptx' | 'archive-entry'
+  kind: 'text' | 'pdf' | 'docx' | 'xlsx' | 'pptx' | 'doc' | 'xls' | 'rtf' | 'odt' | 'ods' | 'odp' | 'epub' | 'archive-entry'
   text: string
   range: Record<string, string | number>
   hasMore: boolean

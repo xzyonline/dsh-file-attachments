@@ -8,13 +8,22 @@ export function encodeAttachmentMarker(id: string): string {
   return `<dsh-file ref="${id}"/>`
 }
 
+export function encodeAttachmentDraft(safeName: string, _id?: string): string {
+  const name = safeName.replace(/[\r\n]+/g, ' ').trim() || '未命名文件'
+  return `附件：${name}`
+}
+
 export function parseAttachmentMarkers(text: string): AttachmentId[] {
   return [...text.matchAll(MARKER)].map(match => match[1] as AttachmentId)
 }
 
-export function removeAttachmentMarker(text: string, id: string): string {
+export function removeAttachmentMarker(text: string, id: string, safeName?: string): string {
   const marker = `<dsh-file ref="${id}"/>`
-  return text
+  const escapedMarker = marker.replace(/[.*+?^${}()|[\]\\]/g, '\\$&')
+  const draftBlock = new RegExp(`(?:^|\\n)附件：[^\\n]*\\n<!--\\s*${escapedMarker}\\s*-->`, 'g')
+  const visibleLine = safeName ? new RegExp(`(?:^|\\n)${`附件：${safeName.replace(/[\r\n]+/g, ' ').trim() || '未命名文件'}`.replace(/[.*+?^${}()|[\]\\]/g, '\\$&')}(?=\\n|$)`) : null
+  return text.replace(draftBlock, '')
+    .replace(visibleLine ?? /$^/, '')
     .replaceAll(`\n${marker}`, '')
     .replaceAll(marker, '')
     .replace(/[ \t]+$/gm, '')

@@ -19,7 +19,7 @@ export async function dispatchAttachmentHttp(req: IncomingMessage, res: ServerRe
     if (suffix === null || (suffix !== '' && !/^\/att_[A-Za-z0-9_-]{6,80}$/.test(suffix))) return respond(res, 404, { ok: false, error: { code: 'ATTACHMENT_FORBIDDEN', message: '资源不存在' } })
     if (req.method === 'POST' && suffix === '') return await upload(req, res, store, options)
     if (req.method === 'GET' && suffix) return await readMetadata(req, res, store, suffix.slice(1), options)
-    if (req.method === 'DELETE' && suffix) return await deleteDraft(req, res, store, suffix.slice(1))
+    if (req.method === 'DELETE' && suffix) return await deleteDraft(req, res, store, suffix.slice(1), options)
     return respond(res, 405, { ok: false, error: { code: 'ATTACHMENT_FORBIDDEN', message: '不支持的请求方法' } })
   } catch (error) {
     return respondError(res, error)
@@ -56,6 +56,7 @@ async function* body(req: IncomingMessage): AsyncIterable<Uint8Array> {
 }
 
 async function readMetadata(req: IncomingMessage, res: ServerResponse, store: AttachmentStore, id: string, options: AttachmentHttpOptions): Promise<void> {
+  if (untrustedOrigin(req, options)) return respond(res, 403, { ok: false, error: { code: 'ATTACHMENT_FORBIDDEN', message: '来源不受信任' } })
   const metadata = await store.get(id as never)
   if (!metadata) return respond(res, 404, { ok: false, error: { code: 'ATTACHMENT_FORBIDDEN', message: '资源不存在' } })
   const sessionId = header(req, 'x-dsh-session-id')
@@ -64,11 +65,18 @@ async function readMetadata(req: IncomingMessage, res: ServerResponse, store: At
   return respond(res, 200, { ok: true, metadata })
 }
 
-async function deleteDraft(req: IncomingMessage, res: ServerResponse, store: AttachmentStore, id: string): Promise<void> {
+async function deleteDraft(req: IncomingMessage, res: ServerResponse, store: AttachmentStore, id: string, options: AttachmentHttpOptions): Promise<void> {
+  if (untrustedOrigin(req, options)) return respond(res, 403, { ok: false, error: { code: 'ATTACHMENT_FORBIDDEN', message: '来源不受信任' } })
   const sessionId = header(req, 'x-dsh-session-id')
   if (!sessionId) return respond(res, 403, { ok: false, error: { code: 'ATTACHMENT_FORBIDDEN', message: '缺少会话' } })
   await store.removeDraft(sessionId, id as never)
   return respond(res, 200, { ok: true })
+}
+
+/** 浏览器跨站请求必带 Origin；带 Origin 且与可信来源不符即拒。缺 Origin 的非浏览器客户端(如本地 curl)仍放行。 */
+function untrustedOrigin(req: IncomingMessage, options: AttachmentHttpOptions): boolean {
+  const origin = header(req, 'origin')
+  return origin !== undefined && origin !== options.expectedOrigin
 }
 
 function header(req: IncomingMessage, name: string): string | undefined {

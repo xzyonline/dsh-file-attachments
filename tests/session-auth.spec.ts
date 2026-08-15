@@ -30,12 +30,9 @@ const store = {
 } as never
 
 describe('authorizeAttachmentRead', () => {
-  it('requires an attachment marker in the current owner session log', async () => {
+  it('authorizes an attachment by immutable session ownership without leaking an id into user text', async () => {
     const metadata = fakeMeta()
-    await expect(authorizeAttachmentRead(sessionQuery([{ type: 'user', text: '请读附件' }]), store, 'session-a', metadata, signal))
-      .rejects.toMatchObject({ code: 'ATTACHMENT_FORBIDDEN' })
-
-    await expect(authorizeAttachmentRead(sessionQuery([{ type: 'user', text: '请读 <dsh-file ref="att_abcdef"/>' }]), store, 'session-a', metadata, signal))
+    await expect(authorizeAttachmentRead(sessionQuery([{ type: 'user', text: '请读附件：note.txt' }]), store, 'session-a', metadata, signal))
       .resolves.toBeUndefined()
   })
 
@@ -45,9 +42,11 @@ describe('authorizeAttachmentRead', () => {
       .rejects.toMatchObject({ code: 'ATTACHMENT_FORBIDDEN' })
   })
 
-  it('rejects a marker whose referenced attachment belongs to another owner', async () => {
-    const foreignStore = { get: async () => fakeMeta({ ownerSessionId: 'session-b' }) } as never
-    await expect(authorizeAttachmentRead(sessionQuery([{ type: 'user', text: '<dsh-file ref="att_abcdef"/>' }]), foreignStore, 'session-a', fakeMeta(), signal))
+  it('rejects reads when the calling session no longer exists', async () => {
+    const metadata = fakeMeta({ ownerSessionId: 'ghost-session' })
+    const missing: SessionQueryLike = { readSession: async () => { throw new Error('no such session') } }
+    await expect(authorizeAttachmentRead(missing, store, 'ghost-session', metadata, signal))
       .rejects.toMatchObject({ code: 'ATTACHMENT_FORBIDDEN' })
   })
+
 })

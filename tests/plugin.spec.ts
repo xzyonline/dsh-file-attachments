@@ -5,7 +5,9 @@ describe('plugin composition', () => {
   it('exports the DSH plugin identity and required injections', () => {
     expect(name).toBe('dsh-file-attachments')
     expect(inject).toEqual(['tools', 'systemPrompt', 'webServer', 'sessionQuery'])
-    expect(ATTACHMENT_PROMPT).toContain('<dsh-file ref="..."/>')
+    expect(ATTACHMENT_PROMPT).toContain('attachment_info')
+    expect(ATTACHMENT_PROMPT).toContain('current-session')
+    expect(ATTACHMENT_PROMPT).toMatch(/no visible marker/i)
   })
 
   it('installs effects without mutating the context directly', () => {

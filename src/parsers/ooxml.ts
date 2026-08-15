@@ -1,6 +1,7 @@
 import { readFile } from 'node:fs/promises'
 import { unzipSync } from 'fflate'
 import { AttachmentError } from '../errors.ts'
+import { inspectZipBytes } from '../detect.ts'
 import { LIMITS } from '../shared/contracts.ts'
 import type { ReadAttachmentRequest, ReadAttachmentResult } from '../worker-protocol.ts'
 
@@ -13,6 +14,10 @@ export interface ZipParts {
 export async function openOoxml(path: string, signal: AbortSignal): Promise<ZipParts> {
   if (signal.aborted) throw signal.reason
   const bytes = await readFile(path)
+  const metadata = inspectZipBytes(bytes)
+  if (!metadata) throw new AttachmentError('CORRUPT_FILE', 'Office 文档压缩包损坏')
+  const decompressed = metadata.entries.reduce((sum, entry) => sum + entry.uncompressedSize, 0)
+  if (decompressed > LIMITS.decompressedBytes) throw new AttachmentError('FILE_TOO_LARGE', '文档解压后超过 256 MB')
   let archive: Record<string, Uint8Array>
   try { archive = unzipSync(bytes) } catch (cause) { throw new AttachmentError('CORRUPT_FILE', 'Office 文档压缩包损坏', undefined, cause) }
   const names = Object.keys(archive)
@@ -52,11 +57,82 @@ export async function readXlsx(path: string, request: Pick<ReadAttachmentRequest
     if (index < 0) throw new AttachmentError('CORRUPT_FILE', '工作表不存在')
     const sheet = await parts.readText(`xl/worksheets/sheet${index + 1}.xml`)
     if (!sheet) throw new AttachmentError('CORRUPT_FILE', '工作表内容缺失')
-    const rows = [...sheet.matchAll(/<row[\s\S]*?<\/row>/g)].slice(0, LIMITS.readLines).map(row => [...row[0]!.matchAll(/<c\b[^>]*>([\s\S]*?)<\/c>/g)].map(cell => stripXml(cell[1]!.replace(/<[^>]+>/g, ''))).join('\t'))
+    const shared = parseSharedStrings(await parts.readText('xl/sharedStrings.xml'))
+    const bounds = parseCellRange(request.range)
+    const rows: string[] = []
+    let runningRow = 0
+    let processed = 0
+    for (const rowMatch of sheet.matchAll(/<row\b[^>]*>([\s\S]*?)<\/row>/g)) {
+      if (processed >= LIMITS.readLines) break
+      processed += 1
+      const openTag = rowMatch[0]!.slice(0, rowMatch[0]!.indexOf('>'))
+      const rowNumberMatch = /\br="(\d+)"/.exec(openTag)
+      const rowNumber = rowNumberMatch ? Number(rowNumberMatch[1]) : runningRow + 1
+      runningRow = rowNumber
+      if (bounds && (rowNumber < bounds.r1 || rowNumber > bounds.r2)) continue
+      const cells: string[] = []
+      for (const cellMatch of rowMatch[1]!.matchAll(/<c\b([^>]*)>([\s\S]*?)<\/c>/g)) {
+        const cellAttrs = cellMatch[1]!
+        const cellInner = cellMatch[2]!
+        if (bounds) {
+          const cellRef = /\br="([A-Za-z]+)\d+"/.exec(cellAttrs)
+          if (cellRef) {
+            const column = columnToNumber(cellRef[1]!)
+            if (column < bounds.c1 || column > bounds.c2) continue
+          }
+        }
+        const typeMatch = /\bt="([^"]+)"/.exec(cellAttrs)
+        const cellType = typeMatch ? typeMatch[1] : undefined
+        let value = ''
+        if (cellType === 'inlineStr') {
+          const inline = /<is>([\s\S]*?)<\/is>/.exec(cellInner)
+          value = stripXml(inline ? inline[1]! : cellInner)
+        } else {
+          const valueMatch = /<v[^>]*>([\s\S]*?)<\/v>/.exec(cellInner)
+          if (valueMatch) {
+            const raw = stripXml(valueMatch[1]!)
+            if (cellType === 's') {
+              const stringIndex = Number(raw)
+              value = Number.isInteger(stringIndex) && stringIndex >= 0 && stringIndex < shared.length ? shared[stringIndex]! : raw
+            } else {
+              value = raw
+            }
+          }
+        }
+        if (value !== '') cells.push(value)
+      }
+      if (cells.length > 0) rows.push(cells.join('\t'))
+    }
     return { kind: 'xlsx', text: rows.join('\n'), range: { sheet: request.sheet, range: request.range ?? 'all' }, hasMore: false, redacted: 0, truncated: false }
   } finally { parts.close() }
 }
 
+function parseSharedStrings(source: string | undefined): string[] {
+  if (!source) return []
+  return [...source.matchAll(/<si\b[^>]*>([\s\S]*?)<\/si>/g)].map(match => stripXml(match[1]!))
+}
+
+interface CellRange { r1: number; c1: number; r2: number; c2: number }
+
+export function parseCellRange(value: string | undefined): CellRange | null {
+  if (!value) return null
+  const match = /^([A-Za-z]+)(\d*)(?::([A-Za-z]+)(\d*))?$/.exec(value.trim())
+  if (!match) return null
+  const c1 = columnToNumber(match[1]!.toUpperCase())
+  const r1 = match[2] ? Number(match[2]) : 1
+  if (!Number.isInteger(r1) || r1 < 1) return null
+  if (match[3] === undefined) return match[2] === '' ? { r1: 1, c1, r2: Number.MAX_SAFE_INTEGER, c2: c1 } : { r1, c1, r2: r1, c2: c1 }
+  const c2 = columnToNumber(match[3]!.toUpperCase())
+  const r2 = match[4] ? Number(match[4]) : Number.MAX_SAFE_INTEGER
+  if (!Number.isInteger(r2) || r2 < r1) return null
+  return { r1, c1, r2, c2 }
+}
+
+export function columnToNumber(column: string): number {
+  let number = 0
+  for (const character of column) number = number * 26 + (character.charCodeAt(0) - 64)
+  return number
+}
 export async function readPptx(path: string, request: Pick<ReadAttachmentRequest, 'page'> = {}, signal: AbortSignal): Promise<ReadAttachmentResult> {
   const parts = await openOoxml(path, signal)
   try {
@@ -69,6 +145,6 @@ export async function readPptx(path: string, request: Pick<ReadAttachmentRequest
   } finally { parts.close() }
 }
 
-function stripXml(value: string): string {
+export function stripXml(value: string): string {
   return value.replace(/<[^>]+>/g, '').replaceAll('&lt;', '<').replaceAll('&gt;', '>').replaceAll('&amp;', '&').trim()
 }

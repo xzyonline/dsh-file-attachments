@@ -1,9 +1,12 @@
 import { Readable } from 'node:stream'
-import { mkdtemp, readdir, readFile, stat } from 'node:fs/promises'
+import { mkdtemp, readdir, readFile, stat, writeFile } from 'node:fs/promises'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
-import { afterEach, describe, expect, it } from 'vitest'
+import { afterEach, beforeAll, describe, expect, it } from 'vitest'
 import { AttachmentStore } from '../src/store.ts'
+import { installInlineParseFactory } from './helpers/inline-parse.ts'
+
+beforeAll(() => installInlineParseFactory())
 
 const roots: string[] = []
 
@@ -82,5 +85,42 @@ describe('AttachmentStore', () => {
     await expect(store.get(first.id)).resolves.toBeUndefined()
     await expect(store.open(second.id)).resolves.toMatchObject({ metadata: { id: second.id } })
     await expect(stat(join(store.root, 'blobs', 'sha256', second.sha256.slice(0, 2), second.sha256))).resolves.toBeTruthy()
+  })
+
+  it('finds the newest same-name attachment only inside the calling session', async () => {
+    let now = 1
+    const root = await mkdtemp(join(tmpdir(), 'dsh-attachments-'))
+    roots.push(root)
+    const store = new AttachmentStore(root, () => now++)
+    await store.put(upload('session-a', 'batch-a', 'report.md', 'old'))
+    const newest = await store.put(upload('session-a', 'batch-b', 'report.md', 'new'))
+    await store.put(upload('session-b', 'batch-c', 'report.md', 'foreign'))
+
+    await expect(store.findLatestByName('session-a', 'report.md')).resolves.toMatchObject({ id: newest.id })
+    await expect(store.findLatestByName('session-c', 'report.md')).resolves.toBeUndefined()
+  })
+
+  it('lists current-session attachments newest first for invisible composer context', async () => {
+    let now = 1
+    const root = await mkdtemp(join(tmpdir(), 'dsh-attachments-'))
+    roots.push(root)
+    const store = new AttachmentStore(root, () => now++)
+    const first = await store.put(upload('session-a', 'batch-a', 'first.md', 'one'))
+    const second = await store.put(upload('session-a', 'batch-a', 'second.md', 'two'))
+    await store.put(upload('session-b', 'batch-b', 'foreign.md', 'no'))
+
+    await expect(store.listLatestBySession('session-a')).resolves.toEqual([second, first])
+  })
+
+  it('heals legacy refs by computing the real storage path on read', async () => {
+    const store = await testStore()
+    const metadata = await store.put(upload('session-a', 'batch-a', 'legacy.txt', 'old'))
+    const refPath = join(store.root, 'refs', `${metadata.id}.json`)
+    const onDisk = JSON.parse(await readFile(refPath, 'utf8')) as Record<string, unknown>
+    delete onDisk.storagePath
+    await writeFile(refPath, JSON.stringify(onDisk))
+
+    const reopened = await store.get(metadata.id)
+    expect(reopened?.storagePath).toBe(join(store.root, 'blobs', 'sha256', metadata.sha256.slice(0, 2), metadata.sha256))
   })
 })

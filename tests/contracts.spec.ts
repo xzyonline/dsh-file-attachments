@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest'
-import { encodeAttachmentMarker, parseAttachmentMarkers, removeAttachmentMarker } from '../src/shared/marker.ts'
+import { encodeAttachmentDraft, encodeAttachmentMarker, parseAttachmentMarkers, removeAttachmentMarker } from '../src/shared/marker.ts'
 import { AttachmentError } from '../src/errors.ts'
 
 describe('attachment marker', () => {
@@ -13,6 +13,13 @@ describe('attachment marker', () => {
   it('removes exactly the requested marker and normalizes excess whitespace', () => {
     expect(removeAttachmentMarker('a\n<dsh-file ref="att_a"/>\n<dsh-file ref="att_b"/>', 'att_a'))
       .toBe('a\n<dsh-file ref="att_b"/>')
+  })
+
+  it('keeps only the visible filename in the plain-text DSH user bubble', () => {
+    const draft = encodeAttachmentDraft('report.md', 'att_abcdef')
+    expect(draft).toBe('附件：report.md')
+    expect(parseAttachmentMarkers(draft)).toEqual([])
+    expect(removeAttachmentMarker(`请分析\n${draft}`, 'att_abcdef', 'report.md')).toBe('请分析')
   })
 })
 

@@ -9,8 +9,14 @@ export async function readPdf(path: string, request: Pick<ReadAttachmentRequest,
   const data = await readFile(path)
   if (data.includes(Buffer.from('/Encrypt'))) throw new AttachmentError('ENCRYPTED_FILE', 'PDF 受密码保护')
   let document: PDFDocumentProxy | undefined
+  let loadingTask: ReturnType<typeof getDocument> | undefined
   try {
-    document = await getDocument({ data: new Uint8Array(data), useSystemFonts: false }).promise
+    loadingTask = getDocument({ data: new Uint8Array(data), useSystemFonts: false, maxImageSize: 16 * 1024 * 1024 })
+    const aborted = new Promise<never>((_resolve, reject) => {
+      if (signal.aborted) reject(signal.reason ?? new DOMException('The operation was aborted.', 'AbortError'))
+      signal.addEventListener('abort', () => reject(signal.reason ?? new DOMException('The operation was aborted.', 'AbortError')), { once: true })
+    })
+    document = await Promise.race([loadingTask.promise, aborted])
     const first = clamp(request.page ?? 1, 1, document.numPages)
     const last = clamp(request.pageEnd ?? first, first, Math.min(document.numPages, first + 9))
     const pages: string[] = []
@@ -32,6 +38,7 @@ export async function readPdf(path: string, request: Pick<ReadAttachmentRequest,
     if (String((error as { name?: string }).name) === 'PasswordException') throw new AttachmentError('ENCRYPTED_FILE', 'PDF 受密码保护', undefined, error)
     throw new AttachmentError('CORRUPT_FILE', 'PDF 无法解析', undefined, error)
   } finally {
+    try { await loadingTask?.destroy() } catch { /* best effort */ }
     await document?.cleanup().catch(() => undefined)
   }
 }

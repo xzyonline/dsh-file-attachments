@@ -1,8 +1,9 @@
-import { open, stat } from 'node:fs/promises'
+import { open, readFile, stat } from 'node:fs/promises'
 import { createReadStream } from 'node:fs'
 import { basename, extname } from 'node:path'
 import { fileTypeFromBuffer, type FileTypeResult } from 'file-type'
 import { inflateSync } from 'fflate'
+import { createRequire } from 'node:module'
 import { LIMITS, type DetectedFileType } from './shared/contracts.ts'
 
 const HEAD_BYTES = 4_100
@@ -26,7 +27,7 @@ export interface DetectPathInput {
 
 type Candidate = Omit<DetectedFileType, 'mismatch' | 'risks'>
 
-interface ZipEntry {
+export interface ZipEntry {
   name: string
   compression: number
   compressedSize: number
@@ -34,7 +35,7 @@ interface ZipEntry {
   localOffset: number
 }
 
-interface ZipMetadata {
+export interface ZipMetadata {
   entries: readonly ZipEntry[]
   archiveBytes: number
 }
@@ -67,6 +68,10 @@ export async function detectFile(input: DetectInput): Promise<DetectedFileType> 
   const binary = looksTextBom(head) ? undefined : await magicFrom(head)
   const container = binary?.ext === 'zip' ? await detectZipContainer(input.bytes) : undefined
   if (container) return finalize(container, safeName, input.declaredMime)
+  if (binary?.ext === 'cfb') {
+    const legacy = classifyCfbFromBuffer(input.bytes)
+    if (legacy) return finalize(legacy, safeName, input.declaredMime)
+  }
   if (binary && !isTextMagic(binary)) return finalize(fromMagic(binary), safeName, input.declaredMime)
 
   const decoded = decodeTextCandidate(head)
@@ -82,6 +87,11 @@ export async function detectFileFromPath(input: DetectPathInput): Promise<Detect
   if (binary?.ext === 'zip') {
     const container = await detectZipContainerFromPath(input.path, input.signal)
     if (container) return finalize(container, safeName, input.declaredMime)
+  }
+  if (binary?.ext === 'cfb') {
+    const legacyBytes = await readCfbBytes(input.path)
+    const legacy = legacyBytes ? classifyCfbFromBuffer(legacyBytes) : undefined
+    if (legacy) return finalize(legacy, safeName, input.declaredMime)
   }
   if (binary && !isTextMagic(binary)) return finalize(fromMagic(binary), safeName, input.declaredMime)
 
@@ -130,6 +140,31 @@ function looksTextBom(bytes: Uint8Array): boolean {
     || (bytes[0] === 0xfe && bytes[1] === 0xff)
 }
 
+async function readCfbBytes(path: string): Promise<Uint8Array | undefined> {
+  try {
+    const info = await stat(path)
+    if (info.size > LIMITS.fileBytes) return undefined
+    return await readFile(path)
+  } catch {
+    return undefined
+  }
+}
+
+function classifyCfbFromBuffer(bytes: Uint8Array): Candidate | undefined {
+  let file: { FileIndex?: { name: string }[] }
+  try {
+    const CFB = createRequire(import.meta.url)('cfb') as typeof import('cfb')
+    file = CFB.read(bytes, { type: 'buffer' })
+  } catch {
+    return undefined
+  }
+  const names = (file.FileIndex ?? []).map(entry => entry.name.toLowerCase())
+  if (names.some(name => name.includes('worddocument'))) return documentCandidate('doc', 'application/msword')
+  if (names.some(name => name.includes('workbook') || name === 'book')) return documentCandidate('xls', 'application/vnd.ms-excel')
+  if (names.some(name => name.includes('powerpoint document'))) return binaryCandidate('ppt', 'application/vnd.ms-powerpoint')
+  return undefined
+}
+
 function fromMagic(file: FileTypeResult): Candidate {
   switch (file.ext) {
     case 'xml': return textCandidate('config-xml', file.mime)
@@ -138,6 +173,7 @@ function fromMagic(file: FileTypeResult): Candidate {
     case 'docx': return documentCandidate('docx', file.mime)
     case 'xlsx': return documentCandidate('xlsx', file.mime)
     case 'pptx': return documentCandidate('pptx', file.mime)
+    case 'rtf': return documentCandidate('rtf', 'application/rtf')
     case 'zip': return archiveCandidate('zip', file.mime)
     case '7z': return archiveCandidate('7z', file.mime)
     case 'rar': return archiveCandidate('rar', file.mime)
@@ -315,10 +351,14 @@ async function classifyZip(metadata: ZipMetadata, readEntry: (entry: ZipEntry) =
   const payload = await readEntry(mimetype)
   if (!payload) return undefined
   const text = decodeZipEntry(mimetype, payload)
-  return text === 'application/epub+zip' ? documentCandidate('epub', 'application/epub+zip') : undefined
+  if (text === 'application/epub+zip') return documentCandidate('epub', 'application/epub+zip')
+  if (text === 'application/vnd.oasis.opendocument.text') return documentCandidate('odt', text)
+  if (text === 'application/vnd.oasis.opendocument.spreadsheet') return documentCandidate('ods', text)
+  if (text === 'application/vnd.oasis.opendocument.presentation') return documentCandidate('odp', text)
+  return undefined
 }
 
-function inspectZipBytes(bytes: Uint8Array): ZipMetadata | undefined {
+export function inspectZipBytes(bytes: Uint8Array): ZipMetadata | undefined {
   if (bytes.byteLength > LIMITS.archiveBytes) return undefined
   const tailStart = Math.max(0, bytes.byteLength - ZIP_EOCD_BYTES)
   const directory = findCentralDirectory(bytes.subarray(tailStart), bytes.byteLength)
@@ -468,7 +508,7 @@ function knownExtensionType(extension: string): string | undefined {
     '.txt': 'text', '.json': 'config-json', '.jsonc': 'config-json', '.yaml': 'config-yaml', '.yml': 'config-yaml',
     '.ini': 'config-ini', '.toml': 'config-toml', '.pdf': 'pdf', '.zip': 'zip', '.7z': '7z', '.rar': 'rar',
     '.png': 'png', '.jpg': 'jpeg', '.jpeg': 'jpeg', '.gif': 'gif', '.webp': 'webp', '.xml': 'config-xml',
-    '.docx': 'docx', '.xlsx': 'xlsx', '.pptx': 'pptx', '.epub': 'epub', '.ts': 'source-typescript',
+    '.docx': 'docx', '.xlsx': 'xlsx', '.pptx': 'pptx', '.epub': 'epub', '.doc': 'doc', '.xls': 'xls', '.ppt': 'ppt', '.wps': 'doc', '.rtf': 'rtf', '.odt': 'odt', '.ods': 'ods', '.odp': 'odp', '.ts': 'source-typescript',
     '.tsx': 'source-typescript', '.js': 'source-javascript', '.jsx': 'source-javascript', '.py': 'source-python',
     '.md': 'markdown', '.mdx': 'markdown', '.csv': 'csv', '.tsv': 'tsv', '.sql': 'sql', '.plist': 'plist',
     '.conf': 'config-ini', '.config': 'config-text', '.sh': 'shell', '.zsh': 'shell', '.bash': 'shell',

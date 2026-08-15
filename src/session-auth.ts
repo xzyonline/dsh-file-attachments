@@ -1,6 +1,5 @@
 import { AttachmentError } from './errors.ts'
-import { LIMITS, type AttachmentId, type AttachmentMetadata } from './shared/contracts.ts'
-import { encodeAttachmentMarker, parseAttachmentMarkers } from './shared/marker.ts'
+import type { AttachmentId, AttachmentMetadata } from './shared/contracts.ts'
 
 export interface SessionQueryLike {
   readSession(sessionId: string): Promise<{ events: readonly unknown[] }>
@@ -10,43 +9,39 @@ export interface AttachmentStoreLike {
   get(id: AttachmentId): Promise<AttachmentMetadata | undefined>
 }
 
+const SESSION_CHECK_TTL_MS = 10_000
+const sessionCheckCache = new Map<string, { ok: boolean; at: number }>()
+
+/** 验证会话真实存在(失败关闭)。短 TTL 缓存,避免大会话每次读取都整本重放。 */
+async function sessionExists(query: SessionQueryLike, sessionId: string): Promise<boolean> {
+  const cached = sessionCheckCache.get(sessionId)
+  const now = Date.now()
+  if (cached && now - cached.at < SESSION_CHECK_TTL_MS) return cached.ok
+  let ok = false
+  try {
+    await query.readSession(sessionId)
+    ok = true
+  } catch {
+    ok = false
+  }
+  sessionCheckCache.set(sessionId, { ok, at: now })
+  return ok
+}
+
 export async function authorizeAttachmentRead(
   query: SessionQueryLike,
-  store: AttachmentStoreLike,
+  _store: AttachmentStoreLike,
   sessionId: string,
   metadata: AttachmentMetadata,
   signal: AbortSignal,
 ): Promise<void> {
   if (metadata.ownerSessionId !== sessionId) forbidden()
   throwIfAborted(signal)
-  const snapshot = await query.readSession(sessionId)
-  throwIfAborted(signal)
-  const needle = encodeAttachmentMarker(metadata.id)
-  const containing = snapshot.events.map(extractEventText).find(text => text.includes(needle))
-  if (containing === undefined) forbidden()
-
-  const referenced = await Promise.all(parseAttachmentMarkers(containing).map(id => store.get(id)))
-  if (referenced.some(item => item === undefined)) forbidden()
-  const attachments = referenced as AttachmentMetadata[]
-  if (attachments.some(item => item.ownerSessionId !== sessionId)) forbidden()
-  if (attachments.length > LIMITS.messageFiles || attachments.reduce((sum, item) => sum + item.bytes, 0) > LIMITS.messageBytes) {
-    throw new AttachmentError('MESSAGE_FILES_TOO_LARGE', '单条消息最多 10 个文件且总计不超过 50 MB')
-  }
-}
-
-function extractEventText(event: unknown): string {
-  if (typeof event === 'string') return event
-  if (!event || typeof event !== 'object') return ''
-  const record = event as Record<string, unknown>
-  if (typeof record.text === 'string') return record.text
-  if (typeof record.content === 'string') return record.content
-  if (Array.isArray(record.content)) return record.content.map(item => extractEventText(item)).join('')
-  if (record.message) return extractEventText(record.message)
-  return ''
+  if (!(await sessionExists(query, sessionId))) forbidden()
 }
 
 function forbidden(): never {
-  throw new AttachmentError('ATTACHMENT_FORBIDDEN', '附件不属于当前会话或未在会话日志中引用')
+  throw new AttachmentError('ATTACHMENT_FORBIDDEN', '附件不属于当前会话')
 }
 
 function throwIfAborted(signal: AbortSignal): void {

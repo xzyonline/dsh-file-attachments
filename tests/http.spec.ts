@@ -2,11 +2,14 @@ import { Readable } from 'node:stream'
 import { mkdtemp, rm } from 'node:fs/promises'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
-import { afterEach, describe, expect, it } from 'vitest'
+import { afterEach, beforeAll, describe, expect, it } from 'vitest'
 import { AttachmentStore } from '../src/store.ts'
 import { dispatchAttachmentHttp, registerAttachmentRoutes } from '../src/http.ts'
+import { installInlineParseFactory } from './helpers/inline-parse.ts'
 
 const roots: string[] = []
+
+beforeAll(() => installInlineParseFactory())
 
 async function setup() {
   const root = await mkdtemp(join(tmpdir(), 'dsh-http-'))
@@ -78,5 +81,17 @@ describe('attachment HTTP routes', () => {
     const response = await callRoute(handler!, 'GET', `/api/dsh-file-attachments/v1/files/${uploaded.body.metadata.id}`, { 'x-dsh-session-id': 'session-b' })
     expect(response.statusCode).toBe(403)
     expect(response.body.error.code).toBe('ATTACHMENT_FORBIDDEN')
+  })
+
+  it('rejects a cross-origin DELETE while still allowing an origin-less local client', async () => {
+    const { store } = await setup()
+    const uploaded = await call(store, { origin: 'http://127.0.0.1:0', 'x-dsh-session-id': 'session-a', 'x-dsh-batch-id': 'batch-a', 'x-dsh-file-name': 'a.config' }, Buffer.from('x=1'))
+    const id = uploaded.body.metadata.id
+    const dispatch = (req: never, res: never) => dispatchAttachmentHttp(req, res, store, { expectedOrigin: 'http://127.0.0.1:0' })
+    const evil = await callRoute(dispatch, 'DELETE', `/api/dsh-file-attachments/v1/files/${id}`, { origin: 'https://evil.test', 'x-dsh-session-id': 'session-a' })
+    expect(evil.statusCode).toBe(403)
+    expect(evil.body.error.code).toBe('ATTACHMENT_FORBIDDEN')
+    const local = await callRoute(dispatch, 'DELETE', `/api/dsh-file-attachments/v1/files/${id}`, { 'x-dsh-session-id': 'session-a' })
+    expect(local.statusCode).toBe(200)
   })
 })
