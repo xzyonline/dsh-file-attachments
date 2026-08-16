@@ -97,7 +97,7 @@ function AttachmentDock(props: InputZoneProps & { drafts: ReturnType<typeof crea
 
 export function apply(ctx: ClientContext): void {
   const drafts = createAttachmentDraftStore(createAttachmentApi())
-  ctx.slots.inject('conversation.input.left', () => ctx.slots.register({ name: 'conversation.input.left', id: 'dsh-file-attach', order: 90, label: '添加文件' }, props => <AttachmentInput {...props as InputZoneProps} drafts={drafts} />))
+  ctx.slots.inject('conversation.input.right', () => ctx.slots.register({ name: 'conversation.input.right', id: 'dsh-file-attach', order: 90, label: '添加文件' }, props => <AttachmentInput {...props as InputZoneProps} drafts={drafts} />))
   ctx.slots.inject('conversation.input.dock', () => ctx.slots.register({ name: 'conversation.input.dock', id: 'dsh-file-attachments', order: 90, label: '文件附件' }, props => <AttachmentDock {...props as InputZoneProps} drafts={drafts} />))
   // 接管 user 消息节点:在携带附件的那条用户气泡下方渲染沉静回执(官方惯例)
   // keyed 槽位同 key 同 priority 会抛错;胜者为 priority 最小者,官方条目为 0,故用 -1 影子接管
