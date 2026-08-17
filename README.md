@@ -52,6 +52,8 @@ The installer builds host + client bundles, symlinks the package into the **shar
 
 Prebuilt bundle: download `dsh-file-attachments-<version>.zip` from [Releases](https://github.com/xzyonline/dsh-file-attachments/releases), verify it against `SHA256SUMS.txt`, extract, and double-click the installer. No git, build step, or package manager required.
 
+**Windows users**: see [docs/WINDOWS-INSTALL.zh.md](./docs/WINDOWS-INSTALL.zh.md) for the full walkthrough (prerequisites, `install.ps1`, manual steps, macOS comparison table, and FAQ). Requires [Node.js](https://nodejs.org/) ≥ 20, [PowerShell](https://learn.microsoft.com/powershell/) 5.1+, and for archives either the built-in `tar.exe` (Windows 10 1803+, [`bsdtar`](https://www.libarchive.org/)) or [Git for Windows](https://git-scm.com/download/win); dependencies via `npm` or [`pnpm`](https://pnpm.io/installation).
+
 ### Per-end deployment
 
 | End | Steps | What you get |
@@ -106,6 +108,6 @@ node scripts/smoke.mjs http://127.0.0.1:3080 <file>   # live smoke against a run
 ## Attribution and license
 
 - **MIT** — see [LICENSE](./LICENSE).
-- **Dependency attributions** — [THIRD_PARTY_NOTICES.md](./THIRD_PARTY_NOTICES.md) (`@keep-lts/xlsx`, `cfb`, `fflate`, `file-type`, `pdfjs-dist`, `word-extractor`, `react`, `schemastery`, build/test tooling).
+- **Dependency attributions** — [THIRD_PARTY_NOTICES.md](./THIRD_PARTY_NOTICES.md) (`@keep-lts/xlsx`, `cfb`, `fflate`, `file-type`, `pdfjs-dist`, `word-extractor`, `react`, build/test tooling).
 - **Derived code** — the user-message renderer used by the delivery receipt is ported from DeepSeek Harness's own `dsh-client-ui-conversation` (MIT); the installer's junction-fallback strategy follows `@linxin666/dsh-client-ui-skin-center` (Apache-2.0). Both are credited in the respective source files and notices.
 - **Design reference** — the content-addressed storage model follows the official `@deepseek-ai/dsh-attachment` package (see conformance table above).

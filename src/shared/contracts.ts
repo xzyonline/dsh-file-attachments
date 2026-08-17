@@ -31,7 +31,7 @@ export type AttachmentErrorCode =
   | 'FILE_TOO_LARGE' | 'MESSAGE_FILES_TOO_LARGE' | 'UNSUPPORTED_FILE_TYPE'
   | 'TYPE_MISMATCH' | 'CORRUPT_FILE' | 'ENCRYPTED_FILE'
   | 'ARCHIVE_PATH_REJECTED' | 'ATTACHMENT_FORBIDDEN'
-  | 'PARSER_TIMEOUT' | 'PARSER_OUTPUT_LIMIT'
+  | 'PARSER_TIMEOUT' | 'PARSER_OUTPUT_LIMIT' | 'TAR_NOT_FOUND'
 
 export interface DetectedFileType {
   family: 'text' | 'document' | 'archive' | 'image' | 'binary' | 'unknown'

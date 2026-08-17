@@ -1,0 +1,11 @@
+# 强制文本行尾：cmd.exe 对 LF 的 goto/call/标签有已知错乱模式，
+# 因此 .bat/.cmd 必须统一检出为 CRLF；PowerShell 脚本同理。
+*.bat  text eol=crlf
+*.cmd  text eol=crlf
+*.ps1  text eol=crlf
+*.psm1 text eol=crlf
+
+# 跨平台 shell 脚本保持 LF。
+*.sh      text eol=lf
+*.command text eol=lf
+*.mjs     text eol=lf

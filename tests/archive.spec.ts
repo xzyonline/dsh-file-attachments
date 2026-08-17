@@ -1,5 +1,10 @@
+import { mkdtemp, rm, writeFile } from 'node:fs/promises'
+import { tmpdir } from 'node:os'
+import { join } from 'node:path'
+import { zipSync } from 'fflate'
 import { describe, expect, it } from 'vitest'
 import { decodeTarEscapes, listArchive, normalizeArchivePath, readArchiveEntry, type ArchiveRunner } from '../src/archive.ts'
+import { AttachmentError } from '../src/errors.ts'
 
 const signal = new AbortController().signal
 
@@ -15,7 +20,7 @@ function fakeBsdtar(result: { list?: string[]; verboseType?: string; verboseName
 }
 
 describe('archive paths', () => {
-  it.each(['../secret', '/etc/passwd', 'a/../../b', 'C:\\Windows\\x', '', '.'])('rejects unsafe archive path %s', value => {
+  it.each(['../secret', '/etc/passwd', 'a/../../b', 'C:\\Windows\\x', 'C:foo', '', '.'])('rejects unsafe archive path %s', value => {
     expect(() => normalizeArchivePath(value)).toThrow(expect.objectContaining({ code: 'ARCHIVE_PATH_REJECTED' }))
   })
 })
@@ -65,5 +70,30 @@ describe('archive boundaries', () => {
     const fake = fakeBsdtar({ verboseType: '-', verboseName: escaped, extract: Buffer.from('{ "ok": true }') })
     const result = await readArchiveEntry({ path: '/blob.zip' }, '链路负载.json', signal, fake.runner)
     expect(result.text).toContain('ok')
+  })
+
+  it('falls back to pure-JS zip listing when tar is missing (TAR_NOT_FOUND)', async () => {
+    const dir = await mkdtemp(join(tmpdir(), 'dsh-zip-fallback-'))
+    const path = join(dir, 'archive.zip')
+    await writeFile(path, zipSync({ 'notes.txt': Buffer.from('hello'), 'dir/a.txt': Buffer.from('x') }))
+    try {
+      const runner: ArchiveRunner = async () => { throw new AttachmentError('TAR_NOT_FOUND', 'no tar') }
+      const page = await listArchive(path, {}, signal, runner)
+      expect(page.entries.map(entry => entry.path).sort()).toEqual(['dir/a.txt', 'notes.txt'])
+    } finally {
+      await rm(dir, { recursive: true, force: true })
+    }
+  })
+
+  it('rethrows TAR_NOT_FOUND for a non-zip archive instead of swallowing it', async () => {
+    const dir = await mkdtemp(join(tmpdir(), 'dsh-zip-fallback-'))
+    const path = join(dir, 'archive.rar')
+    await writeFile(path, Buffer.from('Rar!\x1a\x07\x00 not a zip'))
+    try {
+      const runner: ArchiveRunner = async () => { throw new AttachmentError('TAR_NOT_FOUND', 'no tar') }
+      await expect(listArchive(path, {}, signal, runner)).rejects.toMatchObject({ code: 'TAR_NOT_FOUND' })
+    } finally {
+      await rm(dir, { recursive: true, force: true })
+    }
   })
 })

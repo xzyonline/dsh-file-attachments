@@ -1,9 +1,11 @@
 import { existsSync } from 'node:fs'
+import { readFile } from 'node:fs/promises'
 import { spawn } from 'node:child_process'
 import { AttachmentError } from './errors.ts'
-import { detectFile } from './detect.ts'
+import { detectFile, inspectZipBytes } from './detect.ts'
 import { redactSensitiveText } from './redact.ts'
 import { LIMITS } from './shared/contracts.ts'
+import { throwIfAborted } from './shared/utils.ts'
 
 export type ArchiveRunner = (
   file: string,
@@ -33,7 +35,8 @@ export interface ArchiveHandle {
 
 export function normalizeArchivePath(value: string): string {
   const posix = value.replaceAll('\\', '/')
-  if (posix === '' || posix === '.' || posix.startsWith('/') || /^[A-Za-z]:\//.test(posix)) rejected()
+  // 拒绝绝对路径、盘符绝对路径(C:/、C:\)以及盘符相对路径(C:foo)
+  if (posix === '' || posix === '.' || posix.startsWith('/') || /^[A-Za-z]:/.test(posix)) rejected()
   const normalized = posixPathNormalize(posix)
   if (normalized === '..' || normalized.startsWith('../')) rejected()
   return normalized
@@ -65,11 +68,22 @@ export function decodeTarEscapes(value: string): string {
 }
 
 export async function listArchive(path: string, request: { cursor?: number; limit?: number; prefix?: string } = {}, signal: AbortSignal, runner: ArchiveRunner = runArchiveCommand): Promise<ArchivePage> {
-  const result = await runner(resolveTarBinary(), ['-tf', path], { signal, timeoutMs: LIMITS.archiveTimeoutMs, maxStdout: LIMITS.readBytes, maxStderr: LIMITS.readBytes })
-  if (result.code !== 0) throw new AttachmentError('CORRUPT_FILE', result.stderr.toString() || '无法读取归档目录')
+  let stdout: Buffer
+  try {
+    const result = await runner(resolveTarBinary(), ['-tf', path], { signal, timeoutMs: LIMITS.archiveTimeoutMs, maxStdout: LIMITS.readBytes, maxStderr: LIMITS.readBytes })
+    if (result.code !== 0) throw new AttachmentError('CORRUPT_FILE', result.stderr.toString() || '无法读取归档目录')
+    stdout = result.stdout
+  } catch (error) {
+    // tar 缺失(Windows 无 System32\tar.exe)时回退纯 JS 读取 zip 中央目录,保证 ZIP 仍可列出。
+    if (error instanceof AttachmentError && error.code === 'TAR_NOT_FOUND') {
+      const fallback = await listZipEntriesWithoutTar(path, request, signal)
+      if (fallback) return fallback
+    }
+    throw error
+  }
   const seen = new Set<string>()
   const entries: ArchiveEntry[] = []
-  for (const line of result.stdout.toString('utf8').split(/\r?\n/).filter(Boolean)) {
+  for (const line of stdout.toString('utf8').split(/\r?\n/).filter(Boolean)) {
     if (entries.length >= LIMITS.archiveEntries) break
     let normalized: string
     try {
@@ -77,6 +91,37 @@ export async function listArchive(path: string, request: { cursor?: number; limi
     } catch {
       // One hostile entry must not hide the whole listing: skip it, stay observable.
       console.warn('[dsh-file-attachments] skipping unsafe archive entry:', line)
+      continue
+    }
+    if (seen.has(normalized) || (request.prefix && !normalized.startsWith(normalizeArchivePath(request.prefix)))) continue
+    seen.add(normalized)
+    entries.push({ path: normalized })
+  }
+  const cursor = Math.max(0, request.cursor ?? 0)
+  const limit = Math.max(1, Math.min(request.limit ?? 100, LIMITS.archiveEntries))
+  const page = entries.slice(cursor, cursor + limit)
+  return { entries: page, nextCursor: cursor + page.length < entries.length ? cursor + page.length : undefined }
+}
+
+/** tar 缺失时用纯 JS(fflate 中央目录)列出 zip 条目；非 zip 或超限返回 undefined。 */
+async function listZipEntriesWithoutTar(path: string, request: { cursor?: number; limit?: number; prefix?: string }, signal: AbortSignal): Promise<ArchivePage | undefined> {
+  let bytes: Buffer
+  try {
+    bytes = await readFile(path)
+  } catch {
+    return undefined
+  }
+  throwIfAborted(signal)
+  const metadata = inspectZipBytes(bytes)
+  if (!metadata) return undefined
+  const seen = new Set<string>()
+  const entries: ArchiveEntry[] = []
+  for (const entry of metadata.entries) {
+    if (entries.length >= LIMITS.archiveEntries) break
+    let normalized: string
+    try {
+      normalized = normalizeArchivePath(entry.name)
+    } catch {
       continue
     }
     if (seen.has(normalized) || (request.prefix && !normalized.startsWith(normalizeArchivePath(request.prefix)))) continue
@@ -149,7 +194,14 @@ async function runArchiveCommand(file: string, args: readonly string[], options:
       stderrBytes += chunk.byteLength
       if (stderrBytes <= options.maxStderr) stderr.push(Buffer.from(chunk))
     })
-    child.on('error', error => finish(error))
+    child.on('error', error => {
+      const code = (error as NodeJS.ErrnoException).code
+      if (code === 'ENOENT') {
+        finish(new AttachmentError('TAR_NOT_FOUND', '未找到 tar 命令：Windows 10 1803+ 自带 bsdtar；老系统请安装 Git for Windows 或重启终端后重试'))
+      } else {
+        finish(error)
+      }
+    })
     child.on('close', code => {
       if (settled) return
       settled = true
