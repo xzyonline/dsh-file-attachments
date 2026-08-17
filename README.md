@@ -1,10 +1,10 @@
-# dsh-chat-files — 文件直读
+# dsh-chat-files
 
-> 把文件拖进对话，AI 自动读懂。内部包名保持 `@dsh-external/dsh-file-attachments`（安装链契约，勿改）。
+Session-bound file attachments for DeepSeek Harness. Drag, paste, or select a file into the chat; the agent reads it on its next step through bounded, session-authorized tools. Supports PDF, Office documents, archives, and plain text — with GB18030/GBK decoding, automatic secret redaction, and zip-bomb defense. One-click install on macOS and Windows.
 
-给 DeepSeek Harness 装上「文件直读」：把文件拖进对话、粘贴、或点按钮选择，AI 在下一步就会自动读到它。支持 PDF、Word、Excel、PPT、压缩包、纯文本等常见格式，中文 GBK 编码不乱码，文件里的密码和密钥会在送进模型前自动打码，压缩包炸弹会被拦截。
+DeepSeek Harness 会话文件附件插件。文件拖入、粘贴或选择进对话后，模型在下一步经会话授权的受限工具读取。支持 PDF、Office 文档、压缩包与纯文本；含 GB18030/GBK 中文编码、敏感信息自动脱敏与压缩炸弹防护。macOS 与 Windows 一键安装。
 
-File attachments for DeepSeek Harness: drop, paste, or pick any file into the chat, and the agent reads it on its very next step. PDF, Office documents, archives, and plain text all work — with GB18030/GBK decoding, automatic secret redaction, and zip-bomb protection.
+> 内部包名保持 `@dsh-external/dsh-file-attachments`（安装链契约）。
 
 [![CI](https://github.com/xzyonline/dsh-chat-files/actions/workflows/ci.yml/badge.svg)](https://github.com/xzyonline/dsh-chat-files/actions/workflows/ci.yml)
 [![License: MIT](https://img.shields.io/badge/License-MIT-blue.svg)](./LICENSE)
@@ -16,11 +16,11 @@ File attachments for DeepSeek Harness: drop, paste, or pick any file into the ch
 
 | Capability | Details |
 |---|---|
-| **Intake** | Drop a file **anywhere in the window**, paste it, or use the attach button. Raster images continue on DSH's native image path; everything else enters this plugin. A lightweight "release to attach" overlay replaces the official "images only" blocker toast. |
+| **Intake** | Drop a file **anywhere in the window**, paste it, or use the attach button. Raster images continue on DSH's native image path; everything else enters this plugin. A "release to attach" overlay replaces the native images-only blocker. |
 | **Auto-announcement** | The official wire carries no visible file marker, so a text-only model can silently ignore uploads. Right before the loop enters a step we append one `plugin`-source line announcing every unannounced file **with its detected type**, so the model knows to call `attachment_info` → `read_attachment` / `list_archive` and can combine the file content with the user's words. Injected through the official `agent/pre-step` waterfall (the only serial chain before request derivation — no race, no loss) and rendered by the official UI as an inject line, never a fake user bubble. |
 | **Typed cards** | Composer cards show a distinct icon and colour per detected family (text / document / spreadsheet / presentation / archive / …). |
-| **Delivery receipt** | A quiet line under the user's bubble reports real events: `Agent received → Agent reading… → Agent read`. The final stage appears only after the model actually calls the read tools; nothing is faked. |
-| **Readers** | Text/config/source files, Markdown, **HTML/XML/SVG markup** (detected and read as text), PDF, DOCX, XLSX (sheet + A1-range reads), PPTX, legacy `.doc`/`.xls`, RTF, ODF, EPUB, and ZIP/7z/RAR/EPUB listing with safe single-entry extraction (CJK entry names fully supported). |
+| **Delivery receipt** | A quiet line under the user's bubble reports real events: `Agent received → Agent reading… → Agent read`. The final stage appears only after the model calls the read tools. |
+| **Readers** | Text/config/source files, Markdown, **HTML/XML/SVG markup** (detected and read as text), PDF, DOCX, XLSX (sheet + A1-range reads), PPTX, legacy `.doc`/`.xls`, RTF, ODF, EPUB, and ZIP/7z/RAR/EPUB listing with safe single-entry extraction (CJK entry names supported). |
 | **Model tools** | `attachment_info`, `read_attachment`, `list_archive` — bounded page/range/cursor/paragraph pagination, archives listed before extraction. |
 | **Redaction** | Credential keys, private-key PEM blocks, and YAML block scalars are redacted line-wise before any byte reaches the model (`aws_secret_access_key`, `apiKey`, `set-cookie` included; `public_key`, `monkey` untouched). |
 
