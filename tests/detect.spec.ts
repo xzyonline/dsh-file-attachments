@@ -260,6 +260,14 @@ describe('GB18030 detection', () => {
     expect(result).toMatchObject({ family: 'text', kind: 'text', encoding: 'gb18030', readable: true })
   })
 
+  it('recognizes GBK text containing 4-byte GB18030 sequences (¥)', async () => {
+    // 「价格：¥88\n」的 GBK 编码：¥ 在 GB18030 是四字节序列 81 30 84 36，
+    // 旧启发式会把它误算成两个未配对 lead 而拒绝整个文件（回归修复）。
+    const bytes = Buffer.from([0xBC, 0xDB, 0xB8, 0xF1, 0xA3, 0xBA, 0x81, 0x30, 0x84, 0x36, 0x38, 0x38, 0x0A])
+    const result = await detectFile({ name: 'price.txt', declaredMime: '', bytes })
+    expect(result).toMatchObject({ family: 'text', kind: 'text', encoding: 'gb18030', readable: true })
+  })
+
   it('rejects dense high-byte garbage that GB18030-decodes to printable glyphs', async () => {
     // 0x81-0xFE 偏置的「随机」字节：GB18030 fatal 可解、可打印率 1.0，
     // 但无任何 ASCII(换行/空格/标点)，按字节级启发式应判为 binary。

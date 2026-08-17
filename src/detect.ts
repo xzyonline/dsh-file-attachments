@@ -228,8 +228,21 @@ function gb18030BytesLookTextual(bytes: Uint8Array): boolean {
       continue
     }
     if (byte < 0x81 || byte > 0xfe) continue
+    // GB18030 四字节序列: lead + 0x30-0x39 + lead + 0x30-0x39（如 ¥ 的 81 30 84 36）。
+    // 不识别会误算成两个未配对 lead,拉低 paired/leads 导致真实文本被拒。
+    const second = bytes[index + 1]
+    if (second !== undefined && second >= 0x30 && second <= 0x39) {
+      const third = bytes[index + 2]
+      const fourth = bytes[index + 3]
+      if (third !== undefined && third >= 0x81 && third <= 0xfe && fourth !== undefined && fourth >= 0x30 && fourth <= 0x39) {
+        leads++
+        paired++
+        index += 3
+        continue
+      }
+    }
     leads++
-    const trail = bytes[index + 1]
+    const trail = second
     if (trail !== undefined && trail >= 0x40 && trail <= 0xfe && trail !== 0x7f) {
       paired++
       index++
