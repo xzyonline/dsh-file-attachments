@@ -22,6 +22,8 @@ const PARSE_CACHE_MAX_ENTRIES = 16
 const PARSE_CACHE_MAX_BYTES = 8 * 1024 * 1024
 const parseCache = new Map<string, unknown>()
 let parseCacheBytes = 0
+/** 单飞：并发同 key 的读取共享同一个 worker 结果,避免各起一个 worker。 */
+const parseInFlight = new Map<string, Promise<unknown>>()
 
 function parseCacheKey(name: string, id: string, request: Record<string, unknown>): string {
   return `${name}\u0000${id}\u0000${JSON.stringify(request)}`
@@ -52,6 +54,19 @@ function parseCacheSet(key: string, value: unknown): void {
 function isCacheableParseValue(value: unknown): value is Record<string, unknown> {
   return value !== null && typeof value === 'object' && (value as { ok?: unknown }).ok !== false
 }
+
+/** 命中缓存直接返回;未命中则单飞去重后再起 worker,成功结果写回缓存。 */
+async function runCachedParse(cacheKey: string, spawn: () => Promise<unknown>): Promise<unknown> {
+  const cached = parseCacheGet(cacheKey)
+  if (cached !== undefined) return cached
+  const pending = parseInFlight.get(cacheKey)
+  if (pending !== undefined) return pending
+  const promise = spawn().finally(() => parseInFlight.delete(cacheKey))
+  parseInFlight.set(cacheKey, promise)
+  const value = await promise
+  if (isCacheableParseValue(value)) parseCacheSet(cacheKey, value)
+  return value
+}
 //#endregion
 
 export interface ToolContext {
@@ -67,29 +82,21 @@ export function createAttachmentToolDefinitions(ctx: ToolContext, store: Attachm
     const fileName = String(args.file_name ?? '')
     if (name === 'attachment_info' && !id && !fileName) {
       const attachments = await store.listLatestBySession(exec.agent.id)
-      for (const metadata of attachments) await authorizeAttachmentRead(ctx.sessionQuery, store, exec.agent.id, metadata, exec.signal)
+      for (const metadata of attachments) await authorizeAttachmentRead(ctx.sessionQuery, exec.agent.id, metadata, exec.signal)
       return toLosslessJson({ attachments })
     }
     const metadata = id ? await store.get(id) : name === 'attachment_info' && fileName ? await store.findLatestByName(exec.agent.id, fileName) : undefined
     if (!metadata) throw new AttachmentError('ATTACHMENT_FORBIDDEN', '附件不存在或不可访问')
-    await authorizeAttachmentRead(ctx.sessionQuery, store, exec.agent.id, metadata, exec.signal)
+    await authorizeAttachmentRead(ctx.sessionQuery, exec.agent.id, metadata, exec.signal)
     if (name === 'attachment_info') return toLosslessJson(metadata)
     const handle = await store.open(id)
     if (name === 'list_archive') {
       const request = { cursor: Number(args.cursor ?? 0), limit: Number(args.limit ?? 100), prefix: args.prefix ? String(args.prefix) : undefined }
-      const cacheKey = parseCacheKey('list', id, request)
-      const cached = parseCacheGet(cacheKey)
-      if (cached !== undefined) return toLosslessJson(cached)
-      const value = await runParsedInWorker({ op: 'list', path: handle.path, request }, exec.signal)
-      if (isCacheableParseValue(value)) parseCacheSet(cacheKey, value)
+      const value = await runCachedParse(parseCacheKey('list', id, request), () => runParsedInWorker({ op: 'list', path: handle.path, request }, exec.signal))
       return toLosslessJson(value)
     }
     const request = { offset: Number(args.offset ?? 0), page: args.page ? Number(args.page) : undefined, pageEnd: args.page_end ? Number(args.page_end) : undefined, paragraphOffset: args.paragraph_offset ? Number(args.paragraph_offset) : undefined, paragraphLimit: args.paragraph_limit ? Number(args.paragraph_limit) : undefined, sheet: args.sheet ? String(args.sheet) : undefined, range: args.range ? String(args.range) : undefined, archivePath: args.archive_path ? String(args.archive_path) : undefined }
-    const cacheKey = parseCacheKey('read', id, request)
-    const cached = parseCacheGet(cacheKey)
-    if (cached !== undefined) return toLosslessJson(cached)
-    const value = await runParsedInWorker({ op: 'read', path: handle.path, detectedFamily: handle.metadata.detected.family, detectedKind: handle.metadata.detected.kind, request }, exec.signal)
-    if (isCacheableParseValue(value)) parseCacheSet(cacheKey, value)
+    const value = await runCachedParse(parseCacheKey('read', id, request), () => runParsedInWorker({ op: 'read', path: handle.path, detectedFamily: handle.metadata.detected.family, detectedKind: handle.metadata.detected.kind, request }, exec.signal))
     return toLosslessJson(value)
   }
   return [

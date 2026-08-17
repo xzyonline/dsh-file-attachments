@@ -2,9 +2,10 @@ import type { IncomingMessage, ServerResponse } from 'node:http'
 import { AttachmentError } from './errors.ts'
 import { authorizeAttachmentRead, sessionExists, type SessionQueryLike } from './session-auth.ts'
 import { AttachmentStore } from './store.ts'
-import { LIMITS } from './shared/contracts.ts'
+import { ID_PATTERN, LIMITS, type AttachmentErrorCode } from './shared/contracts.ts'
 
 const ID = /^[A-Za-z0-9_-]{1,128}$/
+const ATTACHMENT_PATH = new RegExp(`^/${ID_PATTERN}$`)
 const BASE = '/api/dsh-file-attachments/v1/files'
 const LOOPBACK_HOSTS = new Set(['127.0.0.1', 'localhost', '[::1]', '::1'])
 
@@ -18,7 +19,7 @@ export async function dispatchAttachmentHttp(req: IncomingMessage, res: ServerRe
   try {
     const url = new URL(req.url ?? '/', 'http://localhost')
     const suffix = url.pathname.startsWith(BASE) ? url.pathname.slice(BASE.length) : null
-    if (suffix === null || (suffix !== '' && !/^\/att_[A-Za-z0-9_-]{6,80}$/.test(suffix))) return respond(res, 404, { ok: false, error: { code: 'ATTACHMENT_FORBIDDEN', message: '资源不存在' } })
+    if (suffix === null || (suffix !== '' && !ATTACHMENT_PATH.test(suffix))) return respond(res, 404, { ok: false, error: { code: 'ATTACHMENT_FORBIDDEN', message: '资源不存在' } })
     if (req.method === 'POST' && suffix === '') return await upload(req, res, store, options)
     if (req.method === 'GET' && suffix) return await readMetadata(req, res, store, suffix.slice(1), options)
     if (req.method === 'DELETE' && suffix) return await deleteDraft(req, res, store, suffix.slice(1), options)
@@ -33,7 +34,7 @@ export function registerAttachmentRoutes(ctx: { webServer: { host: string; port:
     expectedOrigin: `http://${ctx.webServer.host}:${ctx.webServer.port}`,
     authorize: async (sessionId, metadata, signal) => {
       if (!metadata) throw new AttachmentError('ATTACHMENT_FORBIDDEN', '附件不存在或不可访问')
-      await authorizeAttachmentRead(ctx.sessionQuery, store, sessionId, metadata, signal)
+      await authorizeAttachmentRead(ctx.sessionQuery, sessionId, metadata, signal)
     },
     verifySession: (sessionId) => sessionExists(ctx.sessionQuery, sessionId),
   }) })
@@ -112,6 +113,16 @@ function respond(res: ServerResponse, status: number, body: unknown): void {
 }
 
 function respondError(res: ServerResponse, error: unknown): void {
-  if (error instanceof AttachmentError) return respond(res, error.code === 'FILE_TOO_LARGE' || error.code === 'MESSAGE_FILES_TOO_LARGE' ? 413 : error.code === 'ATTACHMENT_FORBIDDEN' ? 403 : 400, { ok: false, error: { code: error.code, message: error.message, details: error.details } })
+  if (error instanceof AttachmentError) return respond(res, statusForCode(error.code), { ok: false, error: { code: error.code, message: error.message, details: error.details } })
   return respond(res, 500, { ok: false, error: { code: 'CORRUPT_FILE', message: '附件处理失败' } })
+}
+
+function statusForCode(code: AttachmentErrorCode): number {
+  switch (code) {
+    case 'FILE_TOO_LARGE':
+    case 'MESSAGE_FILES_TOO_LARGE': return 413
+    case 'PARSER_TIMEOUT': return 504
+    case 'ATTACHMENT_FORBIDDEN': return 403
+    default: return 400
+  }
 }

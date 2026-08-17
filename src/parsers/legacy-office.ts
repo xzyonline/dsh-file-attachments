@@ -3,15 +3,12 @@ import { readFile } from 'node:fs/promises'
 import { unzipSync } from 'fflate'
 import { AttachmentError } from '../errors.ts'
 import { LIMITS } from '../shared/contracts.ts'
-import { parseCellRange, stripXml } from './ooxml.ts'
+import { assertDecompressedWithinBudget, parseCellRange, stripXml } from './ooxml.ts'
 import { inspectZipBytes } from '../detect.ts'
+import { throwIfAborted } from '../shared/utils.ts'
 import type { ReadAttachmentRequest, ReadAttachmentResult } from '../worker-protocol.ts'
 
 const nodeRequire = createRequire(import.meta.url)
-
-function throwIfAborted(signal: AbortSignal): void {
-  if (signal.aborted) throw signal.reason ?? new DOMException('The operation was aborted.', 'AbortError')
-}
 
 function pageText(kind: ReadAttachmentResult['kind'], text: string, request: Pick<ReadAttachmentRequest, 'paragraphOffset' | 'paragraphLimit'>): ReadAttachmentResult {
   const lines = text.split(/\r?\n/)
@@ -175,14 +172,15 @@ async function readZipTexts(path: string): Promise<Record<string, string>> {
   if (bytes.byteLength > LIMITS.archiveBytes) throw new AttachmentError('FILE_TOO_LARGE', '文件超过 100 MB')
   const metadata = inspectZipBytes(bytes)
   if (!metadata) throw new AttachmentError('CORRUPT_FILE', '文档压缩包损坏')
-  const decompressed = metadata.entries.reduce((sum, entry) => sum + entry.uncompressedSize, 0)
-  if (decompressed > LIMITS.decompressedBytes) throw new AttachmentError('FILE_TOO_LARGE', '文档解压后超过 256 MB')
+  const declared = metadata.entries.reduce((sum, entry) => sum + entry.uncompressedSize, 0)
+  if (declared > LIMITS.decompressedBytes) throw new AttachmentError('FILE_TOO_LARGE', '文档解压后超过 256 MB')
   let archive: Record<string, Uint8Array>
   try {
     archive = unzipSync(bytes)
   } catch (cause) {
     throw new AttachmentError('CORRUPT_FILE', '文档压缩包损坏', undefined, cause)
   }
+  assertDecompressedWithinBudget(archive)
   const result: Record<string, string> = {}
   for (const [name, data] of Object.entries(archive)) {
     if (data.byteLength > LIMITS.fileBytes) continue

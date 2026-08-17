@@ -1,15 +1,13 @@
 import { AttachmentError } from './errors.ts'
-import type { AttachmentId, AttachmentMetadata } from './shared/contracts.ts'
+import type { AttachmentMetadata } from './shared/contracts.ts'
+import { throwIfAborted } from './shared/utils.ts'
 
 export interface SessionQueryLike {
   readSession(sessionId: string): Promise<{ events: readonly unknown[] }>
 }
 
-export interface AttachmentStoreLike {
-  get(id: AttachmentId): Promise<AttachmentMetadata | undefined>
-}
-
 const SESSION_CHECK_TTL_MS = 10_000
+const SESSION_CACHE_MAX_ENTRIES = 1_024
 const sessionCheckCache = new Map<string, { ok: boolean; at: number }>()
 
 /** 验证会话真实存在(失败关闭)。短 TTL 缓存,避免大会话每次读取都整本重放。 */
@@ -25,12 +23,17 @@ export async function sessionExists(query: SessionQueryLike, sessionId: string):
     ok = false
   }
   sessionCheckCache.set(sessionId, { ok, at: now })
+  // 防无界增长：超出上限按插入序淘汰最旧条目。
+  while (sessionCheckCache.size > SESSION_CACHE_MAX_ENTRIES) {
+    const oldest = sessionCheckCache.keys().next().value
+    if (oldest === undefined) break
+    sessionCheckCache.delete(oldest)
+  }
   return ok
 }
 
 export async function authorizeAttachmentRead(
   query: SessionQueryLike,
-  _store: AttachmentStoreLike,
   sessionId: string,
   metadata: AttachmentMetadata,
   signal: AbortSignal,
@@ -42,8 +45,4 @@ export async function authorizeAttachmentRead(
 
 function forbidden(): never {
   throw new AttachmentError('ATTACHMENT_FORBIDDEN', '附件不属于当前会话')
-}
-
-function throwIfAborted(signal: AbortSignal): void {
-  if (signal.aborted) throw signal.reason ?? new DOMException('The operation was aborted.', 'AbortError')
 }

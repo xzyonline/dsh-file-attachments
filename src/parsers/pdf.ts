@@ -1,11 +1,15 @@
 import { readFile } from 'node:fs/promises'
-import { getDocument, type PDFDocumentProxy } from 'pdfjs-dist/legacy/build/pdf.mjs'
+import type { PDFDocumentProxy } from 'pdfjs-dist'
 import { AttachmentError } from '../errors.ts'
 import { LIMITS } from '../shared/contracts.ts'
 import type { ReadAttachmentRequest, ReadAttachmentResult } from '../worker-protocol.ts'
 
 export async function readPdf(path: string, request: Pick<ReadAttachmentRequest, 'page' | 'pageEnd'> = {}, signal: AbortSignal): Promise<ReadAttachmentResult> {
   if (signal.aborted) throw signal.reason
+  // 动态 import：pdfjs 约 512KB(legacy min 构建，Node 无 DOM 全局也能跑)，
+  // 只在真正读 PDF 时才解析，避免 txt/docx/zip 检测与读取的每次 worker
+  // 启动都白付这 1MB 模块解析。modern 构建引用 DOMMatrix 等 DOM 全局，Node 下加载即崩。
+  const { getDocument } = await import('pdfjs-dist/legacy/build/pdf.min.mjs') as typeof import('pdfjs-dist')
   const data = await readFile(path)
   if (data.includes(Buffer.from('/Encrypt'))) throw new AttachmentError('ENCRYPTED_FILE', 'PDF 受密码保护')
   let document: PDFDocumentProxy | undefined

@@ -1,11 +1,15 @@
 import { randomUUID } from 'node:crypto'
 import type { AttachmentStore } from './store.ts'
+import { ID_PATTERN } from './shared/contracts.ts'
 
 /** Injected-mark prefix: keeps the line greppable and never collides with user text. */
 export const MARK_PREFIX = '[文件附件]'
 
-/** Attachment ids look like `att_` + hex; announced marks embed them in history text. */
-const ATT_ID_PATTERN = /att_[a-f0-9]{8,}/g
+/** Attachment ids are `att_` + 32 hex; announced marks embed them in history text. */
+const ATT_ID_PATTERN = new RegExp(ID_PATTERN, 'g')
+
+/** 防无界增长：watermark 最多跟踪的会话数，超出按插入序淘汰最旧。 */
+const WATERMARK_MAX_SESSIONS = 256
 
 export interface PreStepPayload {
   agent: { id: string }
@@ -78,6 +82,12 @@ export function createInjectionHandler(store: AttachmentStore, sessionQuery: { r
         // Restart recovery: ids persisted in the durable log were announced before.
         known = await rebuildFromLog(sessionId)
         watermark.set(sessionId, known)
+        // 会话数超限时按插入序淘汰最旧，避免长期运行内存无界增长。
+        while (watermark.size > WATERMARK_MAX_SESSIONS) {
+          const oldest = watermark.keys().next().value
+          if (oldest === undefined) break
+          watermark.delete(oldest)
+        }
       }
       const fresh = attachments.filter((attachment) => !known!.has(attachment.id))
       console.log(`[dsh-file-attachments] pre-step ${sessionId}: attachments=${attachments.length} announced=${known!.size} fresh=${fresh.length}`)

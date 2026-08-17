@@ -97,4 +97,31 @@ describe('redactSensitiveText', () => {
       redacted: 3,
     })
   })
+
+  it('redacts PGP armored private-key blocks', () => {
+    const source = '-----BEGIN PGP PRIVATE KEY BLOCK-----\nbase64-secret\n-----END PGP PRIVATE KEY BLOCK-----'
+    expect(redactSensitiveText(source)).toEqual({
+      text: '-----BEGIN PGP PRIVATE KEY BLOCK-----\n[REDACTED]\n-----END PGP PRIVATE KEY BLOCK-----',
+      redacted: 1,
+    })
+  })
+
+  it.each([
+    ['_authToken: abc', '_authToken: [REDACTED]'],
+    ['authToken=abc', 'authToken=[REDACTED]'],
+    ['stripe_key=sk_live_123', 'stripe_key=[REDACTED]'],
+    ['openai_key=sk-123', 'openai_key=[REDACTED]'],
+    ['DATABASE_URL=postgres://user:pass@host/db', 'DATABASE_URL=[REDACTED]'],
+    ['export PASSWORD=hunter2', 'export PASSWORD=[REDACTED]'],
+    ['passwordHash: $2b$10$abc', 'passwordHash: [REDACTED]'],
+  ])('redacts newly covered secret form %s', (source, expected) => {
+    expect(redactSensitiveText(source).text).toBe(expected)
+  })
+
+  it('still redacts existing compound keys alongside new ones', () => {
+    const source = 'aws_secret_access_key: AKIA123\nOPENAI_API_KEY: sk-abc\nssh_private_key: base64\nclient_secret: value\nstripe_key: rk_live'
+    const result = redactSensitiveText(source)
+    expect(result.text).toBe('aws_secret_access_key: [REDACTED]\nOPENAI_API_KEY: [REDACTED]\nssh_private_key: [REDACTED]\nclient_secret: [REDACTED]\nstripe_key: [REDACTED]')
+    expect(result.redacted).toBe(5)
+  })
 })

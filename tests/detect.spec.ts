@@ -3,7 +3,7 @@ import { mkdtemp, rm, writeFile } from 'node:fs/promises'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 import { describe, expect, it } from 'vitest'
-import { detectFile, detectFileFromPath } from '../src/detect.ts'
+import { detectFile, detectFileFromPath, inspectZipBytes } from '../src/detect.ts'
 
 const text = (name: string, source: string) =>
   detectFile({ name, declaredMime: '', bytes: Buffer.from(source) })
@@ -251,3 +251,79 @@ describe('markup detection (html / xml / svg / markdown)', () => {
     expect(result.mismatch).toBe(true)
   })
 })
+
+describe('GB18030 detection', () => {
+  it('recognizes GBK text with mixed CJK and ASCII line breaks', async () => {
+    // 「中文测试\n第二行\n」的 GBK 编码（UTF-8 fatal 会失败）。
+    const bytes = Buffer.from([0xD6, 0xD0, 0xCE, 0xC4, 0xB2, 0xE2, 0xCA, 0xD4, 0x0A, 0xB5, 0xDA, 0xB6, 0xFE, 0xD0, 0xD0, 0x0A])
+    const result = await detectFile({ name: 'note.txt', declaredMime: '', bytes })
+    expect(result).toMatchObject({ family: 'text', kind: 'text', encoding: 'gb18030', readable: true })
+  })
+
+  it('rejects dense high-byte garbage that GB18030-decodes to printable glyphs', async () => {
+    // 0x81-0xFE 偏置的「随机」字节：GB18030 fatal 可解、可打印率 1.0，
+    // 但无任何 ASCII(换行/空格/标点)，按字节级启发式应判为 binary。
+    const bytes = Buffer.alloc(256)
+    for (let index = 0; index < bytes.length; index++) bytes[index] = 0x81 + ((index * 13) % 0x7e)
+    const result = await detectFile({ name: 'payload.txt', declaredMime: '', bytes })
+    expect(result).toMatchObject({ family: 'binary', kind: 'unknown-binary', readable: false })
+  })
+})
+
+describe('GBK zip entry names', () => {
+  it('decodes GBK entry names instead of rejecting the archive as corrupt', () => {
+    // 「中文.txt」的 GBK 编码：bit11 未置位时旧的 fatal UTF-8 会抛错。
+    const name = Buffer.from([0xD6, 0xD0, 0xCE, 0xC4, 0x2E, 0x74, 0x78, 0x74])
+    const metadata = inspectZipBytes(zipWithName(name, [1, 2, 3]))
+    expect(metadata).toBeDefined()
+    expect(metadata!.entries[0]!.name).toBe('中文.txt')
+  })
+})
+
+/** 手工构造单条目 stored ZIP：name 以原始字节写入，bit11 不置位。 */
+function zipWithName(name: Buffer, payload: number[]): Uint8Array {
+  const data = Buffer.from(payload)
+  const local = Buffer.alloc(30)
+  local.writeUInt32LE(0x04034b50, 0)
+  local.writeUInt16LE(20, 4)
+  local.writeUInt16LE(0, 6)
+  local.writeUInt16LE(0, 8)
+  local.writeUInt16LE(0, 10)
+  local.writeUInt16LE(0x21, 12)
+  local.writeUInt32LE(0, 14)
+  local.writeUInt32LE(data.length, 18)
+  local.writeUInt32LE(data.length, 22)
+  local.writeUInt16LE(name.length, 26)
+  local.writeUInt16LE(0, 28)
+
+  const central = Buffer.alloc(46)
+  central.writeUInt32LE(0x02014b50, 0)
+  central.writeUInt16LE(20, 4)
+  central.writeUInt16LE(20, 6)
+  central.writeUInt16LE(0, 8)
+  central.writeUInt16LE(0, 10)
+  central.writeUInt16LE(0, 12)
+  central.writeUInt16LE(0x21, 14)
+  central.writeUInt32LE(0, 16)
+  central.writeUInt32LE(data.length, 20)
+  central.writeUInt32LE(data.length, 24)
+  central.writeUInt16LE(name.length, 28)
+  central.writeUInt16LE(0, 30)
+  central.writeUInt16LE(0, 32)
+  central.writeUInt16LE(0, 34)
+  central.writeUInt16LE(0, 36)
+  central.writeUInt32LE(0, 38)
+  central.writeUInt32LE(0, 42)
+
+  const eocd = Buffer.alloc(22)
+  eocd.writeUInt32LE(0x06054b50, 0)
+  eocd.writeUInt16LE(0, 4)
+  eocd.writeUInt16LE(0, 6)
+  eocd.writeUInt16LE(1, 8)
+  eocd.writeUInt16LE(1, 10)
+  eocd.writeUInt32LE(central.length + name.length, 12)
+  eocd.writeUInt32LE(local.length + name.length + data.length, 16)
+  eocd.writeUInt16LE(0, 20)
+
+  return Buffer.concat([local, name, data, central, name, eocd])
+}

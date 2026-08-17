@@ -25,27 +25,23 @@ function sessionQuery(events: readonly unknown[]): SessionQueryLike {
   return { readSession: async () => ({ events }) }
 }
 
-const store = {
-  get: async (id: string) => id === 'att_abcdef' ? fakeMeta() : undefined,
-} as never
-
 describe('authorizeAttachmentRead', () => {
   it('authorizes an attachment by immutable session ownership without leaking an id into user text', async () => {
     const metadata = fakeMeta()
-    await expect(authorizeAttachmentRead(sessionQuery([{ type: 'user', text: '请读附件：note.txt' }]), store, 'session-a', metadata, signal))
+    await expect(authorizeAttachmentRead(sessionQuery([{ type: 'user', text: '请读附件：note.txt' }]), 'session-a', metadata, signal))
       .resolves.toBeUndefined()
   })
 
   it('rejects a copied marker from another session', async () => {
     const metadata = fakeMeta({ ownerSessionId: 'session-a' })
-    await expect(authorizeAttachmentRead(sessionQuery([{ type: 'user', text: '<dsh-file ref="att_abcdef"/>' }]), store, 'session-b', metadata, signal))
+    await expect(authorizeAttachmentRead(sessionQuery([{ type: 'user', text: '<dsh-file ref="att_abcdef"/>' }]), 'session-b', metadata, signal))
       .rejects.toMatchObject({ code: 'ATTACHMENT_FORBIDDEN' })
   })
 
   it('rejects reads when the calling session no longer exists', async () => {
     const metadata = fakeMeta({ ownerSessionId: 'ghost-session' })
     const missing: SessionQueryLike = { readSession: async () => { throw new Error('no such session') } }
-    await expect(authorizeAttachmentRead(missing, store, 'ghost-session', metadata, signal))
+    await expect(authorizeAttachmentRead(missing, 'ghost-session', metadata, signal))
       .rejects.toMatchObject({ code: 'ATTACHMENT_FORBIDDEN' })
   })
 

@@ -1,10 +1,11 @@
 import { open, readFile, stat } from 'node:fs/promises'
 import { createReadStream } from 'node:fs'
-import { basename, extname } from 'node:path'
+import { extname } from 'node:path'
 import { fileTypeFromBuffer, type FileTypeResult } from 'file-type'
 import { inflateSync } from 'fflate'
 import { createRequire } from 'node:module'
 import { LIMITS, type DetectedFileType } from './shared/contracts.ts'
+import { sanitizeFilename, throwIfAborted } from './shared/utils.ts'
 
 const HEAD_BYTES = 4_100
 const ZIP_METADATA_BYTES = 2 * 1024 * 1024
@@ -98,20 +99,6 @@ export async function detectFileFromPath(input: DetectPathInput): Promise<Detect
   const decoded = decodeTextCandidate(head)
   if (!decoded) return head.byteLength === 0 ? unknownInput(safeName, input.declaredMime) : unknownBinary(safeName, input.declaredMime)
   return finalize(classifyText(safeName, decoded.text, decoded.encoding), safeName, input.declaredMime)
-}
-
-function sanitizeFilename(name: string): string {
-  const withoutControls = name.replace(/[\u0000-\u001f\u007f-\u009f]/g, '')
-  const base = basename(withoutControls.replace(/\\/g, '/')).replace(/[\\/]/g, '_')
-  if (!base) return 'unnamed'
-
-  const encoder = new TextEncoder()
-  let output = ''
-  for (const character of base) {
-    if (encoder.encode(output + character).byteLength > 255) break
-    output += character
-  }
-  return output || 'unnamed'
 }
 
 async function magicFrom(bytes: Uint8Array): Promise<FileTypeResult | undefined> {
@@ -211,21 +198,54 @@ function decodeTextCandidate(bytes: Uint8Array): { text: string; encoding: NonNu
 }
 
 function decodeGb18030(bytes: Uint8Array): { text: string; encoding: NonNullable<Candidate['encoding']> } | undefined {
+  // 字节级启发式先行：真实 GBK/GB18030 文本的高字节(≥0x80)几乎全部两两成对
+  // (前导 0x81-0xFE + 尾随 0x40-0xFE,非 0x7F)；随机/压缩字节的高字节散乱、成对占比低。
+  if (!gb18030BytesLookTextual(bytes)) return undefined
   let text: string
   try {
     text = new TextDecoder('gb18030', { fatal: true }).decode(bytes)
   } catch {
     return undefined
   }
-  let printable = 0
-  for (const character of text) {
-    const code = character.codePointAt(0)!
-    // 换行/回车/制表是文本正常内容,计入可打印;其余控制字符不计。
-    if (code === 0x09 || code === 0x0a || code === 0x0d || (code >= 0x20 && code !== 0x7f)) printable++
-  }
-  if (printable / Math.max(text.length, 1) < 0.9) return undefined
+  if (!cjkRunsLookTextual(text)) return undefined
   if (containsTooManyControls(text)) return undefined
   return { text, encoding: 'gb18030' }
+}
+
+/**
+ * 字节级启发式：真实 GBK 文本的高字节(0x81-0xFE)几乎全部两两成对(前导+尾随)，
+ * 且必有少量 ASCII(换行/空格/标点)——随机/压缩的高字节流(如 0x81-0xFE 偏置)
+ * 成对占比虽高但连一个 ASCII 都没有，可据此拒绝。
+ */
+function gb18030BytesLookTextual(bytes: Uint8Array): boolean {
+  let leads = 0
+  let paired = 0
+  let ascii = 0
+  for (let index = 0; index < bytes.length; index++) {
+    const byte = bytes[index]!
+    if (byte < 0x80) {
+      ascii++
+      continue
+    }
+    if (byte < 0x81 || byte > 0xfe) continue
+    leads++
+    const trail = bytes[index + 1]
+    if (trail !== undefined && trail >= 0x40 && trail <= 0xfe && trail !== 0x7f) {
+      paired++
+      index++
+    }
+  }
+  return leads > 0 && paired >= 2 && paired / leads >= 0.9 && ascii > 0
+}
+
+/** CJK 连续段占比判定：解码后应存在一定比例的 CJK 字符（≥5%），拒绝纯拉丁/乱码映射。 */
+function cjkRunsLookTextual(text: string): boolean {
+  let cjk = 0
+  for (const character of text) {
+    const code = character.codePointAt(0)!
+    if (code >= 0x4e00 && code <= 0x9fff) cjk++
+  }
+  return cjk / Math.max(text.length, 1) >= 0.05
 }
 
 function decode(bytes: Uint8Array, encoding: NonNullable<Candidate['encoding']>) {
@@ -438,6 +458,7 @@ function parseCentralDirectory(bytes: Uint8Array, expectedEntries: number, archi
     let offset = 0
     while (offset < bytes.byteLength) {
       if (entries.length >= expectedEntries || readU32(bytes, offset) !== 0x02014b50 || offset + 46 > bytes.byteLength) return undefined
+      const generalPurposeFlag = readU16(bytes, offset + 8)
       const compression = readU16(bytes, offset + 10)
       const compressedSize = readU32(bytes, offset + 20)
       const uncompressedSize = readU32(bytes, offset + 24)
@@ -447,7 +468,9 @@ function parseCentralDirectory(bytes: Uint8Array, expectedEntries: number, archi
       const localOffset = readU32(bytes, offset + 42)
       const entryEnd = offset + 46 + nameLength + extraLength + commentLength
       if (compressedSize === 0xffffffff || uncompressedSize === 0xffffffff || localOffset === 0xffffffff || entryEnd > bytes.byteLength || localOffset >= archiveBytes) return undefined
-      const name = new TextDecoder('utf-8', { fatal: true }).decode(bytes.subarray(offset + 46, offset + 46 + nameLength))
+      // bit11(0x0800)=UTF-8 旗标；置位才用 UTF-8，否则按 CP437/GBK 兜底，
+      // 避免 GBK 文件名的 zip 被 fatal UTF-8 误判为损坏。
+      const name = decodeZipEntryName(bytes.subarray(offset + 46, offset + 46 + nameLength), (generalPurposeFlag & 0x0800) !== 0)
       entries.push({ name, compression, compressedSize, uncompressedSize, localOffset })
       offset = entryEnd
     }
@@ -485,6 +508,24 @@ function readLocalHeader(bytes: Uint8Array, entry: ZipEntry, baseOffset = 0): { 
   if (payloadOffset + entry.compressedSize > baseOffset + bytes.byteLength && baseOffset === 0) return undefined
   return { payloadOffset }
 }
+
+/** 解码 zip 条目名：bit11 置位走 UTF-8，否则 GB18030(GBK 超集)→CP437 兜底。 */
+function decodeZipEntryName(bytes: Uint8Array, utf8Flag: boolean): string {
+  if (utf8Flag) {
+    try { return new TextDecoder('utf-8', { fatal: true }).decode(bytes) } catch { /* 声明 UTF-8 但实际非法，继续兜底 */ }
+  }
+  try { return new TextDecoder('gb18030', { fatal: true }).decode(bytes) } catch { /* 非 GBK，回退 CP437 */ }
+  return decodeCp437(bytes)
+}
+
+function decodeCp437(bytes: Uint8Array): string {
+  let output = ''
+  for (const byte of bytes) output += byte < 0x80 ? String.fromCharCode(byte) : CP437_HIGH[byte - 0x80]!
+  return output
+}
+
+/** CP437 高半区(0x80-0xFF)到 Unicode 的映射，共 128 项。 */
+const CP437_HIGH = 'ÇüéâäàåçêëèïîìÄÅÉæÆôöòûùÿÖÜ¢£¥₧ƒáíóúñÑªº¿⌐¬½¼¡«»░▒▓│┤╡╢╖╕╣║╗╝╜╛┐└┴┬├─┼╞╟╚╔╩╦╠═╬╧╨╤╥╙╘╒╓╫╪┘┌█▄▌▐▀αßΓπΣσµτΦΘΩδ∞φε∩≡±≥≤⌠⌡÷≈°∙·√ⁿ²■\u00a0'
 
 function decodeZipEntry(entry: ZipEntry, payload: Uint8Array): string | undefined {
   try {
@@ -574,8 +615,4 @@ async function readHead(path: string, signal: AbortSignal): Promise<Uint8Array> 
     chunks.push(chunk)
   }
   return Buffer.concat(chunks)
-}
-
-function throwIfAborted(signal: AbortSignal): void {
-  if (signal.aborted) throw signal.reason ?? new DOMException('The operation was aborted.', 'AbortError')
 }

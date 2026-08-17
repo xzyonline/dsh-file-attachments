@@ -12,6 +12,21 @@ export const LIMITS = {
 } as const
 
 export type AttachmentId = `att_${string}`
+
+/**
+ * 附件 ID 的唯一权威格式：`att_` + 32 位小写十六进制（UUID v4 去掉连字符）。
+ * store 校验、HTTP 路由、历史文本扫描统一从此派生，禁止各写各的正则。
+ */
+export const ID_PATTERN = 'att_[a-f0-9]{32}'
+
+/**
+ * Worker 线程 V8 内存上限（唯一权威来源）。parse-host 建 Worker 与
+ * parser-worker 传给工厂的参数必须同源，禁止两侧各写一份导致漂移。
+ */
+export const WORKER_RESOURCE_LIMITS: Record<string, number> = {
+  maxOldGenerationSizeMb: 512,
+  maxYoungGenerationSizeMb: 64,
+}
 export type AttachmentErrorCode =
   | 'FILE_TOO_LARGE' | 'MESSAGE_FILES_TOO_LARGE' | 'UNSUPPORTED_FILE_TYPE'
   | 'TYPE_MISMATCH' | 'CORRUPT_FILE' | 'ENCRYPTED_FILE'

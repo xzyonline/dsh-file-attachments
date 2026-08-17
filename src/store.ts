@@ -1,11 +1,12 @@
 import { createHash, randomUUID } from 'node:crypto'
 import { open, mkdir, readFile, readdir, rename, rm, stat } from 'node:fs/promises'
-import { basename, join } from 'node:path'
+import { join } from 'node:path'
 import { runParsedInWorker } from './parse-host.ts'
 import { AttachmentError } from './errors.ts'
-import { LIMITS, type AttachmentId, type AttachmentMetadata, type DetectedFileType } from './shared/contracts.ts'
+import { ID_PATTERN, LIMITS, type AttachmentId, type AttachmentMetadata, type DetectedFileType } from './shared/contracts.ts'
+import { sanitizeFilename, throwIfAborted } from './shared/utils.ts'
 
-const ID_PATTERN = /^att_[A-Za-z0-9_-]{6,80}$/
+const ID_REGEX = new RegExp(`^${ID_PATTERN}$`)
 
 export interface PutAttachmentInput {
   sessionId: string
@@ -82,7 +83,7 @@ export class AttachmentStore {
   }
 
   async get(id: AttachmentId): Promise<AttachmentMetadata | undefined> {
-    if (!ID_PATTERN.test(id)) return undefined
+    if (!ID_REGEX.test(id)) return undefined
     let raw: string
     try {
       raw = await readFile(join(this.root, 'refs', `${id}.json`), 'utf8')
@@ -91,7 +92,7 @@ export class AttachmentStore {
     }
     try {
       const metadata = JSON.parse(raw) as AttachmentMetadata
-      if (metadata.id !== id || !ID_PATTERN.test(metadata.id) || typeof metadata.ownerSessionId !== 'string' || typeof metadata.batchId !== 'string') return undefined
+      if (metadata.id !== id || !ID_REGEX.test(metadata.id) || typeof metadata.ownerSessionId !== 'string' || typeof metadata.batchId !== 'string') return undefined
       if (!/^[a-f0-9]{64}$/.test(metadata.sha256) || !Number.isSafeInteger(metadata.bytes) || metadata.bytes < 0) return undefined
       if (this.blobPath(metadata.sha256) !== join(this.root, 'blobs', 'sha256', metadata.sha256.slice(0, 2), metadata.sha256)) return undefined
       // 旧 ref(修复前写入)没有 storagePath:按 sha256 动态补算真实落盘路径,免磁盘迁移
@@ -200,19 +201,6 @@ function digest(value: string): string {
   return createHash('sha256').update(value).digest('hex')
 }
 
-function sanitizeFilename(name: string): string {
-  const withoutControls = name.replace(/[\u0000-\u001f\u007f-\u009f]/g, '')
-  const base = basename(withoutControls.replace(/\\/g, '/')).replace(/[\\/]/g, '_')
-  if (!base) return 'unnamed'
-  let result = ''
-  const encoder = new TextEncoder()
-  for (const character of base) {
-    if (encoder.encode(result + character).byteLength > 255) break
-    result += character
-  }
-  return result || 'unnamed'
-}
-
 async function writeJsonAtomic(path: string, value: unknown): Promise<void> {
   await mkdir(join(path, '..'), { recursive: true, mode: 0o700 })
   const temp = `${path}.${randomUUID()}.partial`
@@ -227,8 +215,4 @@ async function writeJsonAtomic(path: string, value: unknown): Promise<void> {
     await rm(temp, { force: true })
     throw error
   }
-}
-
-function throwIfAborted(signal: AbortSignal): void {
-  if (signal.aborted) throw signal.reason ?? new DOMException('The operation was aborted.', 'AbortError')
 }

@@ -1,5 +1,5 @@
 import { AttachmentError } from './errors.ts'
-import { LIMITS, type AttachmentErrorCode } from './shared/contracts.ts'
+import { LIMITS, WORKER_RESOURCE_LIMITS, type AttachmentErrorCode } from './shared/contracts.ts'
 import type { ParserRequest, ParserResponse } from './worker-protocol.ts'
 
 export interface WorkerLike {
@@ -17,7 +17,7 @@ export async function runParserWorker(
   const factory = options.workerFactory ?? (() => {
     throw new AttachmentError('UNSUPPORTED_FILE_TYPE', '当前运行环境未配置解析 Worker')
   })
-  const worker = factory(request, { resourceLimits: { maxOldGenerationSizeMb: 128, maxYoungGenerationSizeMb: 16 } })
+  const worker = factory(request, { resourceLimits: WORKER_RESOURCE_LIMITS })
   const timeoutMs = options.timeoutMs ?? LIMITS.parserTimeoutMs
 
   return new Promise<ParserResponse>((resolve, reject) => {

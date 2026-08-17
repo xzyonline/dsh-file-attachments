@@ -3,10 +3,10 @@ export interface RedactionResult {
   redacted: number
 }
 
-const SECRET_KEY = /(^|[_-])(password|passwd|pwd|secret|token|apikey|api[-_]?key|authorization|cookie|private[-_]?key|client[-_]?secret|credential|access[-_]?key)($|[_-])/i
-const SECRET_KEY_CAMEL = /^(password|passwd|pwd|secret|token|apiKey|authorization|cookie|privateKey|clientSecret|credential|accessKey)$/
-const PEM_BEGIN = /^([ \t]*-----BEGIN (?:[A-Z ]+ )?PRIVATE KEY-----)[ \t]*$/
-const PEM_END = /^[ \t]*-----END (?:[A-Z ]+ )?PRIVATE KEY-----[ \t]*$/
+const SECRET_KEY = /(^|[_-])(password|passwd|pwd|secret|token|apikey|api[-_]?key|auth[-_]?token|authorization|cookie|private[-_]?key|client[-_]?secret|credential|access[-_]?key|stripe[-_]?key|openai[-_]?key|database[-_]?url|password[-_]?hash)($|[_-])/i
+const SECRET_KEY_CAMEL = /^(password|passwd|pwd|secret|token|apiKey|authToken|authorization|cookie|privateKey|clientSecret|credential|accessKey|passwordHash)$/
+const PEM_BEGIN = /^([ \t]*-----BEGIN (?:[A-Z0-9 ]+ )?PRIVATE KEY(?: BLOCK)?-----)[ \t]*$/
+const PEM_END = /^[ \t]*-----END (?:[A-Z0-9 ]+ )?PRIVATE KEY(?: BLOCK)?-----[ \t]*$/
 
 export function redactSensitiveText(text: string): RedactionResult {
   const firstNonWhitespace = text.match(/\S/)?.[0]
@@ -54,7 +54,16 @@ function redactLine(line: string): string {
   if (json !== line) return json
   if (/^\s*"/.test(line) && /"\s*:/.test(line)) return line
 
-  const match = line.match(/^(\s*)((?:"[^"]+"|'[^']+'|[A-Za-z][A-Za-z0-9_-]*))(\s*)([:=])(\s*)(.*)$/)
+  // shell `export KEY=value` / `set KEY=value`：剥掉前缀再按普通键值行处理。
+  const exportMatch = line.match(/^(\s*)(export|set)(\s+)/)
+  if (exportMatch) {
+    const prefix = exportMatch[1]! + exportMatch[2]! + exportMatch[3]!
+    const rest = line.slice(prefix.length)
+    const redacted = redactLine(rest)
+    return redacted === rest ? line : prefix + redacted
+  }
+
+  const match = line.match(/^(\s*)((?:"[^"]+"|'[^']+'|[A-Za-z_][A-Za-z0-9_-]*))(\s*)([:=])(\s*)(.*)$/)
   if (!match) return line
   const [, indentation, originalKey, keyWhitespace, separator, valueWhitespace, value] = match
   const key = originalKey!.replace(/^['"]|['"]$/g, '')

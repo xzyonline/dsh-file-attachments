@@ -1,6 +1,7 @@
 import { open, stat } from 'node:fs/promises'
 import { redactSensitiveText } from '../redact.ts'
 import { LIMITS } from '../shared/contracts.ts'
+import { throwIfAborted } from '../shared/utils.ts'
 import type { ReadAttachmentRequest } from '../worker-protocol.ts'
 
 export interface TextPageResult {
@@ -102,8 +103,4 @@ function fitByteLimit(text: string, encoding: TextEncoding): string {
     else high = middle - 1
   }
   return text.slice(0, low)
-}
-
-function throwIfAborted(signal: AbortSignal): void {
-  if (signal.aborted) throw signal.reason ?? new DOMException('The operation was aborted.', 'AbortError')
 }

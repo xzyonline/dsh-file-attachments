@@ -16,10 +16,13 @@ export async function openOoxml(path: string, signal: AbortSignal): Promise<ZipP
   const bytes = await readFile(path)
   const metadata = inspectZipBytes(bytes)
   if (!metadata) throw new AttachmentError('CORRUPT_FILE', 'Office 文档压缩包损坏')
-  const decompressed = metadata.entries.reduce((sum, entry) => sum + entry.uncompressedSize, 0)
-  if (decompressed > LIMITS.decompressedBytes) throw new AttachmentError('FILE_TOO_LARGE', '文档解压后超过 256 MB')
+  const declared = metadata.entries.reduce((sum, entry) => sum + entry.uncompressedSize, 0)
+  if (declared > LIMITS.decompressedBytes) throw new AttachmentError('FILE_TOO_LARGE', '文档解压后超过 256 MB')
   let archive: Record<string, Uint8Array>
   try { archive = unzipSync(bytes) } catch (cause) { throw new AttachmentError('CORRUPT_FILE', 'Office 文档压缩包损坏', undefined, cause) }
+  // 硬校验：累加「实际」解压字节数——中央目录声明的 uncompressedSize 可伪造，
+  // 解压后逐条求和才是可靠预算，超 256MB 立即拒绝（解压炸弹）。
+  assertDecompressedWithinBudget(archive)
   const names = Object.keys(archive)
   if (names.some(name => name.startsWith('/') || name.split('/').includes('..'))) throw new AttachmentError('ARCHIVE_PATH_REJECTED', 'Office 文档包含不安全路径')
   return {
@@ -147,4 +150,12 @@ export async function readPptx(path: string, request: Pick<ReadAttachmentRequest
 
 export function stripXml(value: string): string {
   return value.replace(/<[^>]+>/g, '').replaceAll('&lt;', '<').replaceAll('&gt;', '>').replaceAll('&amp;', '&').trim()
+}
+
+export function assertDecompressedWithinBudget(archive: Record<string, Uint8Array>): void {
+  let actual = 0
+  for (const entry of Object.values(archive)) {
+    actual += entry.byteLength
+    if (actual > LIMITS.decompressedBytes) throw new AttachmentError('FILE_TOO_LARGE', '文档解压后超过 256 MB')
+  }
 }

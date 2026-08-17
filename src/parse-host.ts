@@ -1,7 +1,7 @@
 import { createRequire } from 'node:module'
 import { Worker } from 'node:worker_threads'
 import { runParserWorker, type WorkerFactory, type WorkerLike } from './parser-worker.ts'
-import { LIMITS } from './shared/contracts.ts'
+import { LIMITS, WORKER_RESOURCE_LIMITS } from './shared/contracts.ts'
 import type { ParserRequest } from './worker-protocol.ts'
 
 const require = createRequire(import.meta.url)
@@ -20,7 +20,7 @@ function createThreadWorker(message: ParserRequest, options: { resourceLimits: R
   if (entry === undefined) throw new Error('parse-worker-entry.js 未构建,无法启动解析 Worker')
   const worker = new Worker(entry, {
     workerData: message,
-    resourceLimits: { maxOldGenerationSizeMb: 512, maxYoungGenerationSizeMb: 64 },
+    resourceLimits: WORKER_RESOURCE_LIMITS,
   })
   return worker as unknown as WorkerLike
 }
