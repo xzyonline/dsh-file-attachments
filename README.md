@@ -1,5 +1,7 @@
 # dsh-chat-files
 
+[English](README.md) · [中文](README.zh.md)
+
 Session-bound file attachments for DeepSeek Harness. Drag, paste, or select a file into the chat; the agent reads it on its next step through bounded, session-authorized tools. Supports PDF, Office documents, archives, and plain text — with GB18030/GBK decoding, automatic secret redaction, and zip-bomb defense. One-click install on macOS and Windows.
 
 DeepSeek Harness 会话文件附件插件。文件拖入、粘贴或选择进对话后，模型在下一步经会话授权的受限工具读取。支持 PDF、Office 文档、压缩包与纯文本；含 GB18030/GBK 中文编码、敏感信息自动脱敏与压缩炸弹防护。macOS 与 Windows 一键安装。
@@ -14,15 +16,43 @@ DeepSeek Harness 会话文件附件插件。文件拖入、粘贴或选择进对
 
 ## Features
 
-| Capability | Details |
+| Capability | Summary |
 |---|---|
-| **Intake** | Drop a file **anywhere in the window**, paste it, or use the attach button. Raster images continue on DSH's native image path; everything else enters this plugin. A "release to attach" overlay replaces the native images-only blocker. |
-| **Auto-announcement** | The official wire carries no visible file marker, so a text-only model can silently ignore uploads. Right before the loop enters a step we append one `plugin`-source line announcing every unannounced file **with its detected type**, so the model knows to call `attachment_info` → `read_attachment` / `list_archive` and can combine the file content with the user's words. Injected through the official `agent/pre-step` waterfall (the only serial chain before request derivation — no race, no loss) and rendered by the official UI as an inject line, never a fake user bubble. |
-| **Typed cards** | Composer cards show a distinct icon and colour per detected family (text / document / spreadsheet / presentation / archive / …). |
-| **Delivery receipt** | A quiet line under the user's bubble reports real events: `Agent received → Agent reading… → Agent read`. The final stage appears only after the model calls the read tools. |
-| **Readers** | Text/config/source files, Markdown, **HTML/XML/SVG markup** (detected and read as text), PDF, DOCX, XLSX (sheet + A1-range reads), PPTX, legacy `.doc`/`.xls`, RTF, ODF, EPUB, and ZIP/7z/RAR/EPUB listing with safe single-entry extraction (CJK entry names supported). |
-| **Model tools** | `attachment_info`, `read_attachment`, `list_archive` — bounded page/range/cursor/paragraph pagination, archives listed before extraction. |
-| **Redaction** | Credential keys, private-key PEM blocks, and YAML block scalars are redacted line-wise before any byte reaches the model (`aws_secret_access_key`, `apiKey`, `set-cookie` included; `public_key`, `monkey` untouched). |
+| **Intake** | Drop anywhere in the window, paste, or use the attach button |
+| **Auto-announcement** | Announces each new file to the model before the next step |
+| **Typed cards** | Composer cards show an icon and colour per detected family |
+| **Delivery receipt** | `Agent received → Agent reading… → Agent read` under the user bubble |
+| **Readers** | PDF, DOCX, XLSX, PPTX, legacy `.doc`/`.xls`, RTF, ODF, EPUB, ZIP/7z/RAR, HTML/XML/SVG, Markdown, plain text |
+| **Model tools** | `attachment_info` / `read_attachment` / `list_archive` with bounded pagination |
+| **Redaction** | Credential keys, PEM blocks, and YAML scalars are redacted before reaching the model |
+
+### Intake
+
+Drop a file **anywhere in the window**, paste it, or use the attach button. Raster images continue on DSH's native image path; everything else enters this plugin. A "release to attach" overlay replaces the native images-only blocker.
+
+### Auto-announcement
+
+The message wire carries no visible file marker, so a text-only model can silently ignore uploads. Before each step the plugin appends one `plugin`-source line announcing every unannounced file **with its detected type**; the model then calls `attachment_info` → `read_attachment` / `list_archive` and combines the file content with the user's words. Injected through the official `agent/pre-step` waterfall (the serial chain before request derivation) and rendered by the official UI as an inject line.
+
+### Typed cards
+
+Composer cards show a distinct icon and colour per detected family (text / document / spreadsheet / presentation / archive / …).
+
+### Delivery receipt
+
+A line under the user's bubble reports real events: `Agent received → Agent reading… → Agent read`. The final stage appears only after the model calls the read tools.
+
+### Readers
+
+Text/config/source files, Markdown, **HTML/XML/SVG markup** (detected and read as text), PDF, DOCX, XLSX (sheet + A1-range reads), PPTX, legacy `.doc`/`.xls`, RTF, ODF, EPUB, and ZIP/7z/RAR/EPUB listing with safe single-entry extraction (CJK entry names supported).
+
+### Model tools
+
+`attachment_info`, `read_attachment`, `list_archive` — bounded page/range/cursor/paragraph pagination, archives listed before extraction.
+
+### Redaction
+
+Credential keys, private-key PEM blocks, and YAML block scalars are redacted line-wise before any byte reaches the model (`aws_secret_access_key`, `apiKey`, `set-cookie` included; `public_key`, `monkey` untouched).
 
 ## Architecture
 
