@@ -28,7 +28,7 @@ composer drop / paste / button (client)
    ▼
 POST /api/dsh-file-attachments/v1/files   (Origin + session-existence verified, fail-closed)
    ▼
-content-addressed store  (sha256 blob, atomic hard-link publish, immutable)
+content-addressed store  (sha256 blob, atomic rename publish, immutable)
    ├─ detection (magic bytes + ZIP metadata, worker-isolated)
    ├─ refs + batch indexes (durable metadata, path-injection-validated)
    └─ read path: session ownership check → bounded worker parse → redaction

@@ -4,6 +4,11 @@ import { runParserWorker, type WorkerFactory, type WorkerLike } from './parser-w
 import { LIMITS, WORKER_RESOURCE_LIMITS } from './shared/contracts.ts'
 import type { ParserRequest } from './worker-protocol.ts'
 
+/**
+ * [parse-host] 主线程侧的 worker 调用桥：解析入口解析、Worker 创建、超时/取消管理。
+ * 命名辨析：parse-host=主线程调用桥；parse-core=worker 内调度；
+ * parser-worker=Worker 生命周期管理；parse-worker-entry=worker 线程入口。
+ */
 const require = createRequire(import.meta.url)
 
 /** 生产环境 worker 入口(lib/parse-worker-entry.js,由 tsdown 与 lib/index.js 一同构建)。 */

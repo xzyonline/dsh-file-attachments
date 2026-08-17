@@ -11,7 +11,7 @@ const OBJECT_OUTPUT = {
   render: (_args: Record<string, unknown>, value: unknown) => [{ type: 'text' as const, text: JSON.stringify(value) }],
 }
 
-//#region src/parse-cache.ts
+//#region parse-cache（内联于 tools.ts，无独立源文件）
 /**
  * dsh-files merge (2026-08-17): 附件解析结果 LRU 缓存。
  * 存储内容寻址不可变(sha256 blob),同一 attachment id 的内容永不变,
@@ -67,7 +67,7 @@ async function runCachedParse(cacheKey: string, spawn: () => Promise<unknown>): 
   if (isCacheableParseValue(value)) parseCacheSet(cacheKey, value)
   return value
 }
-//#endregion
+//#endregion parse-cache
 
 export interface ToolContext {
   sessionQuery: { readSession(sessionId: string): Promise<{ events: readonly unknown[] }> }

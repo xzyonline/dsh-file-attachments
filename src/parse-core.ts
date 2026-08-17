@@ -5,6 +5,11 @@ import { readAttachment } from './read.ts'
 import type { ParserRequest, ReadAttachmentRequest } from './worker-protocol.ts'
 
 /**
+ * [parse-core] worker 线程内的解析请求统一调度：与测试内联工厂共用同一实现，
+ * 保证两条路径行为一致(协议不会漂移)。
+ * 命名辨析：parse-core=worker 内调度；parse-host=主线程侧调用桥；
+ * parser-worker=Worker 生命周期管理；parse-worker-entry=worker 线程入口。
+ *
  * 解析请求的统一调度:worker 线程与测试内联工厂共用同一实现,
  * 保证两条路径行为一致(协议不会漂移)。
  */
