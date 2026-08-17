@@ -36,7 +36,7 @@ jobs:
           ./install.command
           test -f "$DSH_HOME/cordis.patch.yml"
           grep -q "id: dsh-file-attachments" "$DSH_HOME/cordis.patch.yml"
-          test -e "$DSH_HOME/profiles/web/node_modules/@dsh-external/dsh-file-attachments/package.json"
+          test -e "$DSH_HOME/profiles/node_modules/@dsh-external/dsh-file-attachments/package.json"
           ./uninstall.command
           if grep -q "id: dsh-file-attachments" "$DSH_HOME/cordis.patch.yml"; then echo "uninstall left the row behind" && exit 1; fi
       - name: Double-click installer smoke (install.bat, Windows only)
