@@ -203,7 +203,29 @@ function decodeTextCandidate(bytes: Uint8Array): { text: string; encoding: NonNu
   }
   if (bom[0] === 0xff && bom[1] === 0xfe) return decode(bytes.subarray(2), 'utf-16le')
   if (bom[0] === 0xfe && bom[1] === 0xff) return decode(swapUtf16Pairs(bytes.subarray(2)), 'utf-16be')
-  return decode(bytes, 'utf-8')
+  const utf8 = decode(bytes, 'utf-8')
+  if (utf8) return utf8
+  // dsh-files merge (2026-08-17): GB18030/GBK 兜底——中文 GBK 文件 UTF-8 fatal 失败后的合法文本候选。
+  // 可打印率 > 0.9 防随机/压缩字节被 GB18030 宽松映射误判为文本。
+  return decodeGb18030(bytes)
+}
+
+function decodeGb18030(bytes: Uint8Array): { text: string; encoding: NonNullable<Candidate['encoding']> } | undefined {
+  let text: string
+  try {
+    text = new TextDecoder('gb18030', { fatal: true }).decode(bytes)
+  } catch {
+    return undefined
+  }
+  let printable = 0
+  for (const character of text) {
+    const code = character.codePointAt(0)!
+    // 换行/回车/制表是文本正常内容,计入可打印;其余控制字符不计。
+    if (code === 0x09 || code === 0x0a || code === 0x0d || (code >= 0x20 && code !== 0x7f)) printable++
+  }
+  if (printable / Math.max(text.length, 1) < 0.9) return undefined
+  if (containsTooManyControls(text)) return undefined
+  return { text, encoding: 'gb18030' }
 }
 
 function decode(bytes: Uint8Array, encoding: NonNullable<Candidate['encoding']>) {

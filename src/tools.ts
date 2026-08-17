@@ -11,6 +11,49 @@ const OBJECT_OUTPUT = {
   render: (_args: Record<string, unknown>, value: unknown) => [{ type: 'text' as const, text: JSON.stringify(value) }],
 }
 
+//#region src/parse-cache.ts
+/**
+ * dsh-files merge (2026-08-17): 附件解析结果 LRU 缓存。
+ * 存储内容寻址不可变(sha256 blob),同一 attachment id 的内容永不变,
+ * 因此缓存键 = id + 请求窗口参数即可,无需 fileVersion 探测。
+ * 双约束(条目数 + 字节预算)防止大 PDF 的解析文本撑爆内存。
+ */
+const PARSE_CACHE_MAX_ENTRIES = 16
+const PARSE_CACHE_MAX_BYTES = 8 * 1024 * 1024
+const parseCache = new Map<string, unknown>()
+let parseCacheBytes = 0
+
+function parseCacheKey(name: string, id: string, request: Record<string, unknown>): string {
+  return `${name}\u0000${id}\u0000${JSON.stringify(request)}`
+}
+
+function parseCacheGet(key: string): unknown {
+  const hit = parseCache.get(key)
+  if (hit === undefined) return undefined
+  parseCache.delete(key)
+  parseCache.set(key, hit)
+  return hit
+}
+
+function parseCacheSet(key: string, value: unknown): void {
+  const size = JSON.stringify(value)?.length ?? 0
+  if (parseCache.has(key)) parseCacheBytes -= JSON.stringify(parseCache.get(key))?.length ?? 0
+  parseCache.set(key, value)
+  parseCacheBytes += size
+  while ((parseCache.size > PARSE_CACHE_MAX_ENTRIES || parseCacheBytes > PARSE_CACHE_MAX_BYTES) && parseCache.size > 0) {
+    const oldest = parseCache.keys().next().value
+    if (oldest === undefined) break
+    parseCacheBytes -= JSON.stringify(parseCache.get(oldest))?.length ?? 0
+    parseCache.delete(oldest)
+  }
+}
+
+/** 仅缓存成功结果;失败(ok:false)与空值不缓存,立即重试保持原语义。 */
+function isCacheableParseValue(value: unknown): value is Record<string, unknown> {
+  return value !== null && typeof value === 'object' && (value as { ok?: unknown }).ok !== false
+}
+//#endregion
+
 export interface ToolContext {
   sessionQuery: { readSession(sessionId: string): Promise<{ events: readonly unknown[] }> }
   tools: { register(definition: ToolDefinition): () => void }
@@ -32,8 +75,22 @@ export function createAttachmentToolDefinitions(ctx: ToolContext, store: Attachm
     await authorizeAttachmentRead(ctx.sessionQuery, store, exec.agent.id, metadata, exec.signal)
     if (name === 'attachment_info') return toLosslessJson(metadata)
     const handle = await store.open(id)
-    if (name === 'list_archive') return toLosslessJson(await runParsedInWorker({ op: 'list', path: handle.path, request: { cursor: Number(args.cursor ?? 0), limit: Number(args.limit ?? 100), prefix: args.prefix ? String(args.prefix) : undefined } }, exec.signal))
-    return toLosslessJson(await runParsedInWorker({ op: 'read', path: handle.path, detectedFamily: handle.metadata.detected.family, detectedKind: handle.metadata.detected.kind, request: { offset: Number(args.offset ?? 0), page: args.page ? Number(args.page) : undefined, pageEnd: args.page_end ? Number(args.page_end) : undefined, paragraphOffset: args.paragraph_offset ? Number(args.paragraph_offset) : undefined, paragraphLimit: args.paragraph_limit ? Number(args.paragraph_limit) : undefined, sheet: args.sheet ? String(args.sheet) : undefined, range: args.range ? String(args.range) : undefined, archivePath: args.archive_path ? String(args.archive_path) : undefined } }, exec.signal))
+    if (name === 'list_archive') {
+      const request = { cursor: Number(args.cursor ?? 0), limit: Number(args.limit ?? 100), prefix: args.prefix ? String(args.prefix) : undefined }
+      const cacheKey = parseCacheKey('list', id, request)
+      const cached = parseCacheGet(cacheKey)
+      if (cached !== undefined) return toLosslessJson(cached)
+      const value = await runParsedInWorker({ op: 'list', path: handle.path, request }, exec.signal)
+      if (isCacheableParseValue(value)) parseCacheSet(cacheKey, value)
+      return toLosslessJson(value)
+    }
+    const request = { offset: Number(args.offset ?? 0), page: args.page ? Number(args.page) : undefined, pageEnd: args.page_end ? Number(args.page_end) : undefined, paragraphOffset: args.paragraph_offset ? Number(args.paragraph_offset) : undefined, paragraphLimit: args.paragraph_limit ? Number(args.paragraph_limit) : undefined, sheet: args.sheet ? String(args.sheet) : undefined, range: args.range ? String(args.range) : undefined, archivePath: args.archive_path ? String(args.archive_path) : undefined }
+    const cacheKey = parseCacheKey('read', id, request)
+    const cached = parseCacheGet(cacheKey)
+    if (cached !== undefined) return toLosslessJson(cached)
+    const value = await runParsedInWorker({ op: 'read', path: handle.path, detectedFamily: handle.metadata.detected.family, detectedKind: handle.metadata.detected.kind, request }, exec.signal)
+    if (isCacheableParseValue(value)) parseCacheSet(cacheKey, value)
+    return toLosslessJson(value)
   }
   return [
     defineTool({ name: 'attachment_info', description: 'List current-session attachments without arguments, or resolve one by file name or opaque id, then return verified metadata and read capability. Call this first whenever the user may have uploaded files, even without an explicit file mention.', parameters: { attachment_id: ATTACHMENT_ID, file_name: { type: 'string', description: 'Optional exact attachment file name when the user identifies one' } }, output: OBJECT_OUTPUT, execute: async (args, exec) => await execute('attachment_info', args, exec as never) as never }),

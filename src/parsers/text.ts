@@ -50,7 +50,9 @@ export async function readTextPage(path: string, request: Pick<ReadAttachmentReq
   }
 }
 
-function decodeText(bytes: Uint8Array, atStart: boolean): { text: string; encoding: 'utf-8' | 'utf-16le' } {
+type TextEncoding = 'utf-8' | 'utf-16le' | 'gb18030'
+
+function decodeText(bytes: Uint8Array, atStart: boolean): { text: string; encoding: TextEncoding } {
   if (atStart && bytes[0] === 0xff && bytes[1] === 0xfe) return { text: new TextDecoder('utf-16le').decode(bytes.subarray(2)), encoding: 'utf-16le' }
   if (atStart && bytes[0] === 0xfe && bytes[1] === 0xff) {
     const swapped = new Uint8Array(bytes.length - 2)
@@ -61,14 +63,36 @@ function decodeText(bytes: Uint8Array, atStart: boolean): { text: string; encodi
     return { text: new TextDecoder('utf-16le').decode(swapped), encoding: 'utf-16le' }
   }
   if (atStart && bytes[0] === 0xef && bytes[1] === 0xbb && bytes[2] === 0xbf) return { text: new TextDecoder().decode(bytes.subarray(3)), encoding: 'utf-8' }
+  // dsh-files merge (2026-08-17): 无 BOM 时先 UTF-8 fatal,失败再 GB18030 fatal,
+  // 最后才回退 non-fatal UTF-8(与旧行为一致,但 GBK 中文不再整页乱码)。
+  try {
+    return { text: new TextDecoder('utf-8', { fatal: true }).decode(bytes), encoding: 'utf-8' }
+  } catch {}
+  try {
+    return { text: new TextDecoder('gb18030', { fatal: true }).decode(bytes), encoding: 'gb18030' }
+  } catch {}
   return { text: new TextDecoder().decode(bytes), encoding: 'utf-8' }
 }
 
-function byteLength(text: string, encoding: 'utf-8' | 'utf-16le'): number {
-  return encoding === 'utf-16le' ? Buffer.byteLength(text, 'utf16le') : Buffer.byteLength(text, 'utf8')
+function byteLength(text: string, encoding: TextEncoding): number {
+  if (encoding === 'utf-16le') return Buffer.byteLength(text, 'utf16le')
+  // dsh-files merge (2026-08-17): GB18030 变长编码,用码点估算字节数,
+  // 防止 fitByteLimit/nextOffset 按 UTF-8 长度误算导致跳行。
+  if (encoding === 'gb18030') {
+    let length = 0
+    for (const character of text) {
+      const code = character.codePointAt(0)
+      if (code === undefined || code < 128) length += 1
+      else if (code < 2048) length += 2
+      else if (code < 65536) length += 3
+      else length += 4
+    }
+    return length
+  }
+  return Buffer.byteLength(text, 'utf8')
 }
 
-function fitByteLimit(text: string, encoding: 'utf-8' | 'utf-16le'): string {
+function fitByteLimit(text: string, encoding: TextEncoding): string {
   if (byteLength(text, encoding) <= LIMITS.readBytes) return text
   let low = 0
   let high = text.length

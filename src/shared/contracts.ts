@@ -22,7 +22,7 @@ export interface DetectedFileType {
   family: 'text' | 'document' | 'archive' | 'image' | 'binary' | 'unknown'
   kind: string
   mime: string
-  encoding?: 'utf-8' | 'utf-16le' | 'utf-16be'
+  encoding?: 'utf-8' | 'utf-16le' | 'utf-16be' | 'gb18030'
   confidence: 'high' | 'medium' | 'low'
   readable: boolean
   mismatch: boolean

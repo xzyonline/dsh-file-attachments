@@ -28,8 +28,11 @@ export async function readPdf(path: string, request: Pick<ReadAttachmentRequest,
     }
     const redacted = pages.map(text => text).join('\n')
     const safe = redacted.split(/\r?\n/).slice(0, LIMITS.readLines).join('\n').slice(0, LIMITS.readBytes)
+    // dsh-files merge (2026-08-17): 扫描件/纯图片 PDF 没有文本层,显式提示而非空串,
+    // 防止模型把「无文本」误读成「空文件」。
+    const text = safe.trim() === '' && document.numPages > 0 ? '[此 PDF 没有文本层（可能是扫描件或纯图片文档），read_attachment 无法提取文字内容]' : safe
     return {
-      kind: 'pdf', text: safe, range: { page: first, pageEnd: last, pages: document.numPages },
+      kind: 'pdf', text, range: { page: first, pageEnd: last, pages: document.numPages },
       hasMore: last < document.numPages, next: last < document.numPages ? { page: last + 1 } : undefined,
       redacted: 0, truncated: safe.length < redacted.length,
     }
@@ -45,14 +48,25 @@ export async function readPdf(path: string, request: Pick<ReadAttachmentRequest,
 
 function orderText(items: unknown[]): string {
   const positioned = items.map(item => {
-    const value = item as { str?: string; transform?: number[] }
-    return { text: value.str ?? '', x: value.transform?.[4] ?? 0, y: value.transform?.[5] ?? 0 }
+    const value = item as { str?: string; transform?: number[]; width?: number }
+    return { text: value.str ?? '', x: value.transform?.[4] ?? 0, y: value.transform?.[5] ?? 0, width: value.width ?? 0 }
   }).filter(item => item.text)
   positioned.sort((a, b) => Math.abs(a.y - b.y) > 2 ? b.y - a.y : a.x - b.x)
   let previousY: number | undefined
+  let previousX: number | undefined
+  let previousWidth: number | undefined
   return positioned.map(item => {
-    const prefix = previousY === undefined || Math.abs(previousY - item.y) <= 2 ? '' : '\n'
+    let prefix = ''
+    if (previousY !== undefined && Math.abs(previousY - item.y) > 2) {
+      prefix = '\n'
+    } else if (previousY !== undefined && previousX !== undefined && previousWidth !== undefined && item.x > previousX + previousWidth + 1) {
+      // dsh-files merge (2026-08-17): 相邻 text run 存在水平间隙时补空格,
+      // PDF 常把单词拆成多个 run,直接拼接会得到 "Helloworld"。
+      prefix = ' '
+    }
     previousY = item.y
+    previousX = item.x
+    previousWidth = item.width
     return prefix + item.text
   }).join('')
 }
