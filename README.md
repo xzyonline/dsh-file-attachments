@@ -1,12 +1,14 @@
-# dsh-file-attachments
+# dsh-chat-files — 文件直读
+
+> 把文件拖进对话，AI 自动读懂。内部包名保持 `@dsh-external/dsh-file-attachments`（安装链契约，勿改）。
 
 给 DeepSeek Harness 装上「文件直读」：把文件拖进对话、粘贴、或点按钮选择，AI 在下一步就会自动读到它。支持 PDF、Word、Excel、PPT、压缩包、纯文本等常见格式，中文 GBK 编码不乱码，文件里的密码和密钥会在送进模型前自动打码，压缩包炸弹会被拦截。
 
 File attachments for DeepSeek Harness: drop, paste, or pick any file into the chat, and the agent reads it on its very next step. PDF, Office documents, archives, and plain text all work — with GB18030/GBK decoding, automatic secret redaction, and zip-bomb protection.
 
-[![CI](https://github.com/xzyonline/dsh-file-attachments/actions/workflows/ci.yml/badge.svg)](https://github.com/xzyonline/dsh-file-attachments/actions/workflows/ci.yml)
+[![CI](https://github.com/xzyonline/dsh-chat-files/actions/workflows/ci.yml/badge.svg)](https://github.com/xzyonline/dsh-chat-files/actions/workflows/ci.yml)
 [![License: MIT](https://img.shields.io/badge/License-MIT-blue.svg)](./LICENSE)
-[![Release](https://img.shields.io/github/v/release/xzyonline/dsh-file-attachments)](https://github.com/xzyonline/dsh-file-attachments/releases)
+[![Release](https://img.shields.io/github/v/release/xzyonline/dsh-chat-files)](https://github.com/xzyonline/dsh-chat-files/releases)
 
 ---
 
@@ -52,7 +54,7 @@ node scripts/install.mjs
 
 The installer builds host + client bundles, symlinks the package into the **shared** profile directory (`$DSH_HOME/profiles/node_modules`, so *every* profile — web, CLI, headless — resolves it), and appends one row to `$DSH_HOME/cordis.patch.yml` (a backup is written first). It is idempotent: running it again is safe. Uninstall: `node scripts/install.mjs --uninstall` or `uninstall.bat` / `uninstall.command`.
 
-Prebuilt bundle: download `dsh-file-attachments-<version>.zip` from [Releases](https://github.com/xzyonline/dsh-file-attachments/releases), verify it against `SHA256SUMS.txt`, extract, and double-click the installer. No git, build step, or package manager required.
+Prebuilt bundle: download `dsh-file-attachments-<version>.zip` from [Releases](https://github.com/xzyonline/dsh-chat-files/releases), verify it against `SHA256SUMS.txt`, extract, and double-click the installer. No git, build step, or package manager required.
 
 **Windows users**: see [docs/WINDOWS-INSTALL.zh.md](./docs/WINDOWS-INSTALL.zh.md) for the full walkthrough (prerequisites, `install.ps1`, manual steps, macOS comparison table, and FAQ). Requires [Node.js](https://nodejs.org/) ≥ 20, [PowerShell](https://learn.microsoft.com/powershell/) 5.1+, and for archives either the built-in `tar.exe` (Windows 10 1803+, [`bsdtar`](https://www.libarchive.org/)) or [Git for Windows](https://git-scm.com/download/win); dependencies via `npm` or [`pnpm`](https://pnpm.io/installation).
 

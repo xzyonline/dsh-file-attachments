@@ -1,4 +1,4 @@
-# Windows 安装指南（dsh-file-attachments）
+# Windows 安装指南（dsh-chat-files · 文件直读）
 
 本指南面向 Windows 10/11 用户，覆盖一键安装、手动安装、与 macOS 的能力对照、以及常见问题排查。**插件所有能力（文本编码识别、zip 条目名解码、各类文档读取、脱敏、归档列表/提取）在 Windows 上与 macOS 完全一致**，差异仅在于系统命令与路径。
 
@@ -34,7 +34,7 @@
 .\install.ps1                          # 安装到 web profile，数据目录 %USERPROFILE%\.dsh
 .\install.ps1 -Profile desktop         # 指定 profile
 .\install.ps1 -Home D:\dsh             # 自定义数据目录（等价 DSH_HOME）
-.\install.ps1 -Source https://github.com/xzyonline/dsh-file-attachments.git  # git clone 安装
+.\install.ps1 -Source https://github.com/xzyonline/dsh-chat-files.git  # git clone 安装
 .\install.ps1 -Source D:\src\dsh-file-attachments                            # 本地目录安装
 .\install.ps1 -Smoke                   # 部署后额外跑冒烟测试（需 web 已运行）
 .\install.ps1 -Uninstall               # 卸载
